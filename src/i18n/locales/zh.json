@@ -1,0 +1,81 @@
+{
+  "common": {
+    "loading": "加载中...",
+    "error": "错误",
+    "success": "成功",
+    "cancel": "取消",
+    "confirm": "确认",
+    "save": "保存",
+    "delete": "删除",
+    "refresh": "刷新"
+  },
+  "nav": {
+    "dashboard": "仪表盘",
+    "navigation": "网站导航",
+    "toolbox": "工具箱",
+    "visualrecall": "视觉回溯",
+    "mygpt": "Chat",
+    "aiengine": "AI 引擎",
+
+    "vault": "保险箱",
+    "clipboard": "剪贴板",
+    "timeauditor": "时间审计",
+    "automation": "自动化任务",
+    "skillCenter": "技能中心",
+    "cheatsheet": "速查表",
+    "settings": "设置"
+  },
+  "dashboard": {
+    "title": "Dashboard",
+    "welcome": "欢迎使用 Local Dev Dashboard，管理你的本地开发环境。",
+    "dockerContainers": "Docker 容器",
+    "dockerContainersDesc": "{{total}} 个服务中 {{running}} 个运行中",
+    "dockerStatus": "服务状态",
+    "dockerConnected": "在线",
+    "dockerDisconnected": "离线",
+    "dockerRunning": "基础设施服务正常",
+    "dockerNotRunning": "请检查后台服务状态",
+    "systemStatus": "系统状态",
+    "systemNormal": "正常",
+    "systemWarning": "警告",
+    "allServicesAvailable": "所有服务可用",
+    "dockerNotRunningShort": "Docker 未运行",
+    "infraStatus": "基础设施状态",
+    "infraStatusDesc": "数据库和中间件资源状态",
+    "running": "在线",
+    "stopped": "离线",
+    "notCreated": "未连接"
+  },
+
+  "settings": {
+    "title": "设置",
+    "description": "配置应用程序偏好设置",
+    "appearance": {
+      "title": "外观设置",
+      "description": "自定义应用程序外观",
+      "theme": "主题",
+      "dark": "深色",
+      "light": "浅色",
+      "system": "跟随系统",
+      "language": "语言",
+      "terminalFont": "终端字体",
+      "terminalFontSize": "终端字体大小",
+      "enableVirtualAvatar": "启用主页虚拟人",
+      "enableVirtualAvatarDesc": "开启后，将在仪表盘首页展示 3D 虚拟人形象"
+    },
+    "about": {
+      "title": "关于",
+      "description": "应用程序信息",
+      "version": "版本"
+    },
+    "security": {
+      "title": "安全设置",
+      "description": "配置保险箱及身份认证相关的隐私安全选项",
+      "vaultAutoLock": "保险箱自动锁定",
+      "vaultAutoLockDesc": "一段时间无操作后，保险箱将自动锁定并清除内存缓存",
+      "vaultAutoLockNote": "最长支持 12 小时。建议根据你的环境选择合适的时间。",
+      "unitMinute": "分钟",
+      "unitHour": "小时"
+    }
+  }
+}

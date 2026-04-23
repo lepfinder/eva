@@ -1,0 +1,87 @@
+{
+  "common": {
+    "loading": "Loading...",
+    "error": "Error",
+    "success": "Success",
+    "cancel": "Cancel",
+    "confirm": "Confirm",
+    "save": "Save",
+    "delete": "Delete",
+    "refresh": "Refresh"
+  },
+  "nav": {
+    "dashboard": "Dashboard",
+
+    "navigation": "Navigation",
+    "toolbox": "Toolbox",
+    "visualrecall": "Visual Recall",
+    "mygpt": "Chat",
+    "aiengine": "AI Engine",
+
+    "vault": "Vault",
+    "clipboard": "Clipboard",
+    "timeauditor": "Time Auditor",
+    "automation": "Automation Tasks",
+    "skillCenter": "Skill Center",
+    "cheatsheet": "Cheat Sheet",
+    "settings": "Settings"
+  },
+  "dashboard": {
+    "title": "Dashboard",
+    "welcome": "Welcome to Local Dev Dashboard, manage your local development environment.",
+    "runningApps": "Running Apps",
+    "runningAppsDesc": "Currently running development projects",
+    "dockerContainers": "Docker Containers",
+    "dockerContainersDesc": "{{running}} of {{total}} services running",
+    "dockerStatus": "Service Status",
+    "dockerConnected": "Online",
+    "dockerDisconnected": "Offline",
+    "dockerRunning": "Infra services normal",
+    "dockerNotRunning": "Check background service",
+    "systemStatus": "System Status",
+    "systemNormal": "Normal",
+    "systemWarning": "Warning",
+    "allServicesAvailable": "All services available",
+    "dockerNotRunningShort": "Docker not running",
+    "recentApps": "Recent Apps",
+    "recentAppsDesc": "Quick access to your recent projects",
+    "noProjects": "No projects yet, click \"Applications\" to add your first project",
+    "infraStatus": "Infrastructure Status",
+    "infraStatusDesc": "DB and middleware resource status",
+    "running": "Online",
+    "stopped": "Offline",
+    "notCreated": "Disconnected"
+  },
+
+  "settings": {
+    "title": "Settings",
+    "description": "Configure application preferences",
+    "appearance": {
+      "title": "Appearance",
+      "description": "Customize application appearance",
+      "theme": "Theme",
+      "dark": "Dark",
+      "light": "Light",
+      "system": "System",
+      "language": "Language",
+      "terminalFont": "Terminal Font",
+      "terminalFontSize": "Terminal Font Size",
+      "enableVirtualAvatar": "Enable Virtual Avatar",
+      "enableVirtualAvatarDesc": "Show the 3D virtual avatar on the dashboard homepage"
+    },
+    "about": {
+      "title": "About",
+      "description": "Application information",
+      "version": "Version"
+    },
+    "security": {
+      "title": "Security",
+      "description": "Configure privacy and security options for the vault and authentication",
+      "vaultAutoLock": "Vault Auto-Lock",
+      "vaultAutoLockDesc": "The vault will auto-lock and clear memory cache after a period of inactivity",
+      "vaultAutoLockNote": "Supports up to 12 hours. Choose a time that fits your environment.",
+      "unitMinute": "Minute(s)",
+      "unitHour": "Hour(s)"
+    }
+  }
+}
