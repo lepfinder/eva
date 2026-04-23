@@ -3,6 +3,7 @@
  * GitHub 风格的日历热力图，展示每日生产力趋势
  */
 import { useState, useEffect, useMemo, useCallback } from 'react'
+import { invoke } from '@tauri-apps/api/core'
 import { ChevronDown, ChevronUp, Calendar } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
@@ -104,9 +105,9 @@ export function ProductivityHeatmap({ selectedDate, onDateSelect }: Productivity
             try {
                 setLoading(true)
                 // 尝试重建缺失的数据
-                await window.api.activity.rebuildDailyStats()
+                await invoke('activity_rebuild_daily_stats')
                 // 加载热力图数据
-                const data = await window.api.activity.getHeatmapData(currentYear)
+                const data = await invoke<HeatmapDataPoint[]>('activity_get_heatmap_data', { year: currentYear })
                 setHeatmapData(data)
             } catch (error) {
                 console.error('Failed to load heatmap data:', error)

@@ -4,6 +4,7 @@
  */
 
 import React, { useState, useEffect, useCallback, useRef } from 'react'
+import { invoke } from '@tauri-apps/api/core'
 import { motion, AnimatePresence } from 'framer-motion'
 import { X } from 'lucide-react'
 import { TimelineCanvas, ActivityBlock } from './TimelineCanvas'
@@ -116,7 +117,7 @@ export function TimeCapsule({ isOpen, onClose, date }: TimeCapsuleProps): React.
             setIsLoading(true)
             try {
                 console.log('[TimeCapsule] Loading data for date:', date || 'today')
-                const logs: ActivityLog[] = await window.api.activity.getTodayLogs(date)
+                const logs: ActivityLog[] = await invoke('activity_get_today_logs', { date })
                 console.log('[TimeCapsule] Loaded', logs.length, 'logs')
 
                 if (logs.length === 0) {
@@ -179,26 +180,9 @@ export function TimeCapsule({ isOpen, onClose, date }: TimeCapsuleProps): React.
                 setCurrentTime(startSeconds)
                 setStartOfDayTimestamp(startOfDay) // 保存 startOfDay
 
-                // 加载当天的视觉回溯截图
+                // 视觉回溯截图预览 (在 EVA 中不可用)
                 try {
-                    console.log(`[TimeCapsule] Requesting snapshots: ${startOfDay} to ${startOfDay + 86400 * 1000}, limit=20000`)
-                    const snapshots = await window.api.visualRecall.searchSnapshots({
-                        startTime: startOfDay,
-                        endTime: startOfDay + 86400 * 1000,
-                        limit: 20000
-                    })
-                    console.log(`[TimeCapsule] Received search response:`, snapshots)
-                    if (snapshots?.snapshots) {
-                        // 按时间排序
-                        const sorted = snapshots.snapshots.sort((a: SnapshotInfo, b: SnapshotInfo) => a.timestamp - b.timestamp)
-                        setAllSnapshots(sorted)
-                        console.log('[TimeCapsule] Loaded', sorted.length, 'visual recall snapshots')
-                        if (sorted.length > 0) {
-                            console.log('[TimeCapsule] First snapshot:', sorted[0])
-                            console.log('[TimeCapsule] Last snapshot:', sorted[sorted.length - 1])
-                            console.log('[TimeCapsule] startOfDay:', startOfDay)
-                        }
-                    }
+                    // visual recall not available in eva
                 } catch (err) {
                     console.warn('[TimeCapsule] Failed to load visual recall snapshots:', err)
                 }

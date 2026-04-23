@@ -161,6 +161,22 @@ const clipboardApi: Record<string, AnyFn> = {
   },
 }
 
+// Activity Tracker
+const activityApi: Record<string, AnyFn> = {
+  getTodayStats: (date?: string) => invoke('activity_get_today_stats', { date }),
+  getTodayLogs: (date?: string) => invoke('activity_get_today_logs', { date }),
+  getTodayTotalDuration: (date?: string) => invoke('activity_get_today_total_duration', { date }),
+  getStatsByCategory: (date?: string) => invoke('activity_get_stats_by_category', { date }),
+  getStatsByProject: (date?: string) => invoke('activity_get_stats_by_project', { date }),
+  getTodayLogsCount: (date?: string) => invoke('activity_get_today_logs_count', { date }),
+  getDailySummary: (date: string) => invoke('activity_get_daily_summary', { date }),
+  updateRemark: (id: string, remark: string | null) => invoke('activity_update_remark', { id, remark }),
+  classifyNow: () => invoke('activity_classify_now'),
+  generateSummary: (date: string) => invoke('activity_generate_summary', { date }),
+  getHeatmapData: (year: number) => invoke('activity_get_heatmap_data', { year }),
+  rebuildDailyStats: () => invoke('activity_rebuild_daily_stats'),
+}
+
 export function initDesktopBridge(): void {
   if ((window as any).api) return
   // Merge: implemented methods call real Tauri commands; rest fall through to stub defaults.
@@ -174,6 +190,7 @@ export function initDesktopBridge(): void {
       if (key === 'env') return envApi
       if (key === 'app') return appApi
       if (key === 'clipboard') return clipboardApi
+      if (key === 'activity') return activityApi
       return stub[key]
     },
   })

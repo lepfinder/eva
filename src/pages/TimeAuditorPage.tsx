@@ -3,6 +3,7 @@
  * 展示今日应用使用时间统计
  */
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
+import { invoke } from '@tauri-apps/api/core'
 import { RefreshCw, Clock, Monitor, TrendingUp, Sparkles, FolderOpen, FileText, CalendarDays, SearchX, Play, List, EyeOff, ChevronRight, Calendar, ChevronLeft } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -290,7 +291,7 @@ function VirtualizedActivityTable({ logs, remarkEdits, setRemarkEdits, setLogs, 
                                     onChange={(e) => setRemarkEdits(prev => ({ ...prev, [log.id]: e.target.value }))}
                                     onBlur={async () => {
                                         if (remarkEdits[log.id] !== undefined && remarkEdits[log.id] !== (log.remark || '')) {
-                                            await window.api.activity.updateRemark(log.id, remarkEdits[log.id] || null)
+                                            await invoke('activity_update_remark', { id: log.id, remark: remarkEdits[log.id] || null })
                                             setLogs(prev => prev.map(l => l.id === log.id ? { ...l, remark: remarkEdits[log.id] || undefined } : l))
                                         }
                                     }}
@@ -374,12 +375,12 @@ export function TimeAuditorPage() {
             setLoading(true)
 
             const [statsData, logsData, total, catStats, projStats, count] = await Promise.all([
-                window.api.activity.getTodayStats(selectedDate),
-                window.api.activity.getTodayLogs(selectedDate),
-                window.api.activity.getTodayTotalDuration(selectedDate),
-                window.api.activity.getStatsByCategory(selectedDate),
-                window.api.activity.getStatsByProject(selectedDate),
-                window.api.activity.getTodayLogsCount(selectedDate)
+                invoke<AppStat[]>('activity_get_today_stats', { date: selectedDate }),
+                invoke<ActivityLog[]>('activity_get_today_logs', { date: selectedDate }),
+                invoke<number>('activity_get_today_total_duration', { date: selectedDate }),
+                invoke<CategoryStat[]>('activity_get_stats_by_category', { date: selectedDate }),
+                invoke<ProjectStat[]>('activity_get_stats_by_project', { date: selectedDate }),
+                invoke<number>('activity_get_today_logs_count', { date: selectedDate })
             ])
             setStats(statsData)
             setLogs(logsData)
@@ -400,7 +401,7 @@ export function TimeAuditorPage() {
             setSummary('')
             if (!selectedDate) return
             try {
-                const saved = await window.api.activity.getDailySummary(selectedDate)
+                const saved = await invoke<{ content: string; model?: string; createdAt: number } | null>('activity_get_daily_summary', { date: selectedDate })
                 if (saved) {
                     setSummary(saved.content)
                 }
@@ -415,7 +416,7 @@ export function TimeAuditorPage() {
     const handleClassify = useCallback(async () => {
         try {
             setClassifying(true)
-            const count = await window.api.activity.classifyNow()
+            const count = await invoke<number>('activity_classify_now')
             console.log(`Classified ${count} activities`)
             // 分类完成后重新加载数据
             await loadData()
@@ -431,7 +432,7 @@ export function TimeAuditorPage() {
         try {
             setGeneratingSummary(true)
             // 传入选中的日期
-            const result = await window.api.activity.generateSummary(selectedDate)
+            const result = await invoke<string>('activity_generate_summary', { date: selectedDate })
             setSummary(result)
         } catch (error) {
             console.error('Failed to generate summary:', error)

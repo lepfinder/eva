@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { invoke } from '@tauri-apps/api/core'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 
 interface ActivityLog {
@@ -43,7 +44,7 @@ export function TimePulseHeatmap(): React.ReactElement {
     useEffect(() => {
         const loadData = async () => {
             try {
-                const logs: ActivityLog[] = await window.api.activity.getTodayLogs()
+                const logs: ActivityLog[] = await invoke('activity_get_today_logs')
 
                 // 按小时聚合数据
                 const hourMap = new Map<number, Map<string, number>>()

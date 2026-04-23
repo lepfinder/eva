@@ -1,3 +1,4 @@
+pub mod activity_tracker;
 pub mod clipboard;
 pub mod env_detector;
 pub mod local_ports;
@@ -21,9 +22,13 @@ pub fn run() {
             navigation::try_migrate(app.handle());
             settings::try_migrate_user_data(app.handle());
 
-            // Initialise clipboard service (creates DB, seeds last state, starts polling)
+            // Initialise clipboard service
             let clipboard_state = clipboard::init(app.handle());
             app.manage(clipboard_state);
+
+            // Initialise activity tracker (creates DB, starts polling)
+            let activity_state = activity_tracker::init(app.handle());
+            app.manage(activity_state);
 
             Ok(())
         })
@@ -73,6 +78,19 @@ pub fn run() {
             clipboard::clipboard_write_to_clipboard,
             clipboard::clipboard_get_stats,
             clipboard::clipboard_get_image_data,
+            // ActivityTracker
+            activity_tracker::activity_get_today_stats,
+            activity_tracker::activity_get_today_logs,
+            activity_tracker::activity_get_today_total_duration,
+            activity_tracker::activity_get_stats_by_category,
+            activity_tracker::activity_get_stats_by_project,
+            activity_tracker::activity_get_today_logs_count,
+            activity_tracker::activity_get_daily_summary,
+            activity_tracker::activity_update_remark,
+            activity_tracker::activity_classify_now,
+            activity_tracker::activity_generate_summary,
+            activity_tracker::activity_get_heatmap_data,
+            activity_tracker::activity_rebuild_daily_stats,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
