@@ -98,6 +98,8 @@ pub fn run() {
             activity_tracker::activity_get_daily_summary,
             activity_tracker::activity_update_remark,
             activity_tracker::activity_classify_now,
+            activity_tracker::activity_get_unclassified_batch,
+            activity_tracker::activity_apply_ai_classification,
             activity_tracker::activity_generate_summary,
             activity_tracker::activity_get_heatmap_data,
             activity_tracker::activity_rebuild_daily_stats,

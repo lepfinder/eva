@@ -126,7 +126,6 @@ export function SettingsPage(): React.ReactElement {
 
   // 快捷键名称映射
   const hotkeyLabels: Record<string, string> = {
-    moduleGPT: '跳转 MyGPT',
     moduleVault: '跳转保险箱',
     moduleTimeAuditor: '跳转时间审计',
     timeMark: '快速时间标记'

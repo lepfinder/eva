@@ -417,9 +417,85 @@ export function TimeAuditorPage() {
     const handleClassify = useCallback(async () => {
         try {
             setClassifying(true)
-            const count = await invoke<number>('activity_classify_now')
-            console.log(`Classified ${count} activities`)
-            // 分类完成后重新加载数据
+
+            // Step 1: 静态规则快速分类
+            const staticCount = await invoke<number>('activity_classify_now')
+            console.log(`[classify] static rules: ${staticCount}`)
+
+            // Step 2: 取仍未分类的条目，交给 AI
+            const aiCfg = getActiveAiConfig()
+            if (aiCfg) {
+                type UnclassifiedItem = { id: string; appName: string; windowTitle: string }
+                const unclassified = await invoke<UnclassifiedItem[]>('activity_get_unclassified_batch', { limit: 200 })
+
+                if (unclassified.length > 0) {
+                    const categories = [
+                        'development', 'operations', 'research', 'communication',
+                        'writing', 'design', 'entertainment', 'productivity',
+                        'browsing', 'distracted', 'system', 'other'
+                    ]
+
+                    // 每批最多 30 条，避免超 token
+                    const BATCH = 30
+                    const allResults: Array<{ appName: string; windowTitle: string; category: string; projectName?: string }> = []
+
+                    for (let i = 0; i < unclassified.length; i += BATCH) {
+                        const batch = unclassified.slice(i, i + BATCH)
+                        const lines = batch.map((u, idx) =>
+                            `${idx + 1}. app="${u.appName}" title="${u.windowTitle}"`
+                        ).join('\n')
+
+                        const prompt = `You are classifying computer activities. For each entry below, return ONLY a JSON array (no explanation).
+Each element: {"app":"<app_name>","title":"<window_title>","category":"<one of: ${categories.join('|')}>","project":"<project name or null>"}
+"project" should be the extracted project/repo name from the window title if obvious (e.g., "my-app" from "my-app — VS Code"), otherwise null.
+
+Entries:
+${lines}`
+
+                        try {
+                            const res = await fetch(`${aiCfg.config.baseUrl}/chat/completions`, {
+                                method: 'POST',
+                                headers: {
+                                    'Content-Type': 'application/json',
+                                    Authorization: `Bearer ${aiCfg.config.apiKey}`,
+                                },
+                                body: JSON.stringify({
+                                    model: aiCfg.config.model,
+                                    messages: [{ role: 'user', content: prompt }],
+                                    max_tokens: 1200,
+                                    temperature: 0,
+                                }),
+                            })
+
+                            if (res.ok) {
+                                const data = await res.json()
+                                const text: string = data.choices?.[0]?.message?.content || ''
+                                // Extract JSON array from response (may have markdown fences)
+                                const match = text.match(/\[[\s\S]*\]/)
+                                if (match) {
+                                    const parsed = JSON.parse(match[0]) as Array<{ app: string; title: string; category: string; project?: string | null }>
+                                    for (const item of parsed) {
+                                        allResults.push({
+                                            appName: item.app,
+                                            windowTitle: item.title,
+                                            category: item.category || 'other',
+                                            projectName: item.project || undefined,
+                                        })
+                                    }
+                                }
+                            }
+                        } catch (batchErr) {
+                            console.error('[classify] AI batch failed', batchErr)
+                        }
+                    }
+
+                    if (allResults.length > 0) {
+                        const aiCount = await invoke<number>('activity_apply_ai_classification', { results: allResults })
+                        console.log(`[classify] AI classified: ${aiCount}`)
+                    }
+                }
+            }
+
             await loadData()
         } catch (error) {
             console.error('Failed to classify:', error)

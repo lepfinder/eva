@@ -28,8 +28,7 @@ import {
   DialogFooter,
 } from '@/components/ui/dialog'
 import { ScrollArea } from '@/components/ui/scroll-area'
-import { ModelSelectorFull } from '@/components/common/ModelSelector'
-import { useAIProviders } from '@/hooks/useAIProviders'
+import { AI_PROVIDERS } from '@/components/AiProviderSettings'
 
 interface EnvTool {
   id: string
@@ -95,7 +94,6 @@ export function EnvDetector() {
   const [processingIndex, setProcessingIndex] = useState(-1)
   const [processedIds, setProcessedIds] = useState<Set<string>>(new Set())
   const [skipExisting, setSkipExisting] = useState(true)
-  const [aiSelectedModel, setAiSelectedModel] = useState('')
 
   const scanEnvironment = async (force = false) => {
     // 非强制扫描时先检查缓存
@@ -188,9 +186,6 @@ export function EnvDetector() {
     )
   }
 
-  // 使用通用模型 Hook
-  const { parseModelValue } = useAIProviders()
-
   // 真正的 AI 生成过程
   const startAIGeneration = async () => {
     const targets = (Array.isArray(tools) ? tools : []).filter(t => t.installed && (!skipExisting || !t.description || t.description.includes('暂无') || t.description.includes('暂未探测')))
@@ -200,12 +195,22 @@ export function EnvDetector() {
         return
     }
 
+    // 读取设置页中配置的 AI 供应商
+    const activeId = localStorage.getItem('eva:ai:activeProvider') || 'bailian'
+    const cfgRaw = localStorage.getItem(`eva:ai:provider:${activeId}`)
+    const providerCfg = cfgRaw ? JSON.parse(cfgRaw) : null
+    const providerDef = AI_PROVIDERS.find(p => p.id === activeId)
+
+    if (!providerCfg?.apiKey) {
+        alert('请先在设置页 → AI 供应商中配置 API Key')
+        return
+    }
+
     setAiStep('processing')
     setIsAIProcessing(true)
     setProcessedIds(new Set())
     
     let currentTools = [...tools];
-    const parsed = parseModelValue(aiSelectedModel)
 
     // 获取 AI Engine 的 URL
     // @ts-ignore
@@ -220,11 +225,11 @@ export function EnvDetector() {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    model: parsed.actualModel,
-                    provider: parsed.isOllama ? { type: 'ollama' } : {
+                    model: providerCfg.model || providerDef?.defaultModel,
+                    provider: {
                         type: 'openai',
-                        api_base: parsed.baseUrl,
-                        api_key: parsed.apiKey
+                        api_base: providerCfg.baseUrl || providerDef?.baseUrl,
+                        api_key: providerCfg.apiKey
                     },
                     message: `请为开发工具 "${tool.name}" 写一段简短的中文介绍。
 要求：
@@ -520,11 +525,17 @@ export function EnvDetector() {
             {aiStep === 'config' ? (
                 <div className="space-y-6 py-2">
                     <div className="space-y-2">
-                        <label className="text-sm font-medium text-muted-foreground">服务商 / 模型</label>
-                        <ModelSelectorFull
-                            value={aiSelectedModel}
-                            onValueChange={setAiSelectedModel}
-                        />
+                        <label className="text-sm font-medium text-muted-foreground">当前使用的模型</label>
+                        <div className="flex items-center justify-between rounded-md border bg-muted/50 px-3 py-2 text-sm">
+                            <span className="font-medium">{(() => {
+                                const activeId = localStorage.getItem('eva:ai:activeProvider') || 'bailian'
+                                const cfgRaw = localStorage.getItem(`eva:ai:provider:${activeId}`)
+                                const cfg = cfgRaw ? JSON.parse(cfgRaw) : null
+                                const def = AI_PROVIDERS.find(p => p.id === activeId)
+                                return cfg?.model || def?.defaultModel || '未配置'
+                            })()}</span>
+                            <span className="text-xs text-muted-foreground">在设置页 → AI 供应商中配置</span>
+                        </div>
                     </div>
 
                     <div className="flex items-center space-x-2 pt-2">

@@ -85,6 +85,7 @@ pub struct ActivityState {
     db_path: String,
     current: Option<CurrentActivity>,
     was_idle: bool,
+    is_suspended: bool,
     last_sample_ts: i64,   // wall-clock ms of last successful sample (suspend detection)
     last_stats_update: i64,
 }
@@ -319,6 +320,23 @@ fn system_idle_secs() -> u64 {
     0
 }
 
+fn is_screen_locked() -> bool {
+    let out = std::process::Command::new("ioreg")
+        .args(["-n", "Root", "-d1"])
+        .output()
+        .ok();
+
+    if let Some(o) = out {
+        let s = String::from_utf8_lossy(&o.stdout);
+        for line in s.lines() {
+            if line.contains("CGSSessionScreenIsLocked") {
+                return line.contains("Yes") || line.contains("1");
+            }
+        }
+    }
+    false
+}
+
 // ──────────────────────────────────────────────────
 // DB setup
 // ──────────────────────────────────────────────────
@@ -405,6 +423,7 @@ pub fn start_polling(state: SharedActivityState) {
         let now = now_ms();
         let idle_secs = system_idle_secs();
         let is_idle = idle_secs >= IDLE_TIMEOUT_SECS;
+        let screen_locked = is_screen_locked();
 
         let mut guard = match state.lock() {
             Ok(g) => g,
@@ -422,6 +441,31 @@ pub fn start_polling(state: SharedActivityState) {
             }
             guard.was_idle = false;
         }
+
+        // Locked screen is treated as suspended: do not record as Distracted.
+        if screen_locked {
+            if !guard.is_suspended {
+                if let Some(ref cur) = guard.current.take() {
+                    if let Some(conn) = guard.conn() {
+                        db_save_activity(&conn, &cur.app_name, &cur.window_title, cur.start_time, now);
+                    }
+                }
+                guard.was_idle = false;
+                guard.is_suspended = true;
+            }
+            guard.last_sample_ts = now;
+            continue;
+        }
+
+        // Just resumed from locked/suspended state.
+        if guard.is_suspended {
+            guard.is_suspended = false;
+            guard.was_idle = false;
+            guard.current = None;
+            guard.last_sample_ts = now;
+            continue;
+        }
+
         guard.last_sample_ts = now;
 
         // Idle → start Distracted record
@@ -834,6 +878,83 @@ pub fn activity_classify_now(state: tauri::State<SharedActivityState>) -> i64 {
     updated
 }
 
+/// Batch-fetch unclassified logs for AI classification in the frontend
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UnclassifiedItem {
+    pub id: String,
+    pub app_name: String,
+    pub window_title: String,
+}
+
+#[tauri::command]
+pub fn activity_get_unclassified_batch(
+    state: tauri::State<SharedActivityState>,
+    limit: Option<i64>,
+) -> Vec<UnclassifiedItem> {
+    let guard = match state.lock() { Ok(g) => g, Err(_) => return vec![] };
+    let conn = match guard.conn() { Some(c) => c, None => return vec![] };
+    let limit = limit.unwrap_or(200);
+
+    // Only return rows where static classification left them as 'other'
+    let mut stmt = match conn.prepare(
+        "SELECT id, app_name, window_title FROM activity_logs
+         WHERE (category = 'other' OR classified = 0)
+           AND app_name NOT IN ('Distracted','Rest','System')
+         GROUP BY app_name, window_title
+         ORDER BY MAX(start_time) DESC
+         LIMIT ?1"
+    ) { Ok(s) => s, Err(_) => return vec![] };
+
+    stmt.query_map([limit], |r| {
+        Ok(UnclassifiedItem { id: r.get(0)?, app_name: r.get(1)?, window_title: r.get(2)? })
+    })
+    .map(|rows| rows.flatten().collect())
+    .unwrap_or_default()
+}
+
+/// Classification result sent back from frontend AI call
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiClassificationResult {
+    pub app_name: String,
+    pub window_title: String,
+    pub category: String,
+    pub project_name: Option<String>,
+}
+
+#[tauri::command]
+pub fn activity_apply_ai_classification(
+    state: tauri::State<SharedActivityState>,
+    results: Vec<AiClassificationResult>,
+) -> i64 {
+    let guard = match state.lock() { Ok(g) => g, Err(_) => return 0 };
+    let conn = match guard.conn() { Some(c) => c, None => return 0 };
+
+    let valid_cats = [
+        "development","operations","research","communication","writing",
+        "design","entertainment","productivity","browsing","distracted",
+        "system","rest","other",
+    ];
+    let mut updated = 0i64;
+
+    for r in results {
+        let cat = r.category.trim().to_lowercase();
+        let cat = if valid_cats.contains(&cat.as_str()) { cat } else { "other".to_string() };
+        let affected = conn.execute(
+            "UPDATE activity_logs SET category=?1, project_name=?2, classified=1
+             WHERE app_name=?3 AND window_title=?4 AND (category='other' OR classified=0)",
+            params![cat, r.project_name, r.app_name, r.window_title],
+        ).unwrap_or(0);
+        updated += affected as i64;
+    }
+
+    // Refresh daily stats after bulk update
+    update_daily_stats_impl(&conn);
+
+    updated
+}
+
 /// Generate summary stub — AI engine not available in eva
 #[tauri::command]
 pub fn activity_generate_summary(
@@ -961,6 +1082,7 @@ pub fn init(app: &AppHandle) -> SharedActivityState {
         db_path,
         current: None,
         was_idle: false,
+        is_suspended: false,
         last_sample_ts: 0,
         last_stats_update: 0,
     }));
