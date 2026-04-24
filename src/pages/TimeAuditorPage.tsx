@@ -4,6 +4,7 @@
  */
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { invoke } from '@tauri-apps/api/core'
+import { getActiveAiConfig } from '@/components/AiProviderSettings'
 import { RefreshCw, Clock, Monitor, TrendingUp, Sparkles, FolderOpen, FileText, CalendarDays, SearchX, Play, List, EyeOff, ChevronRight, Calendar, ChevronLeft } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -431,12 +432,45 @@ export function TimeAuditorPage() {
     const handleGenerateSummary = useCallback(async () => {
         try {
             setGeneratingSummary(true)
-            // 传入选中的日期
-            const result = await invoke<string>('activity_generate_summary', { date: selectedDate })
-            setSummary(result)
-        } catch (error) {
+
+            // 先从 Rust 拿统计数据
+            const rawSummary = await invoke<string>('activity_generate_summary', { date: selectedDate })
+
+            // 检查是否有 AI 配置
+            const aiCfg = getActiveAiConfig()
+            if (!aiCfg) {
+                // 没有配置 AI，直接展示统计数据
+                setSummary(rawSummary + '\n\n> 💡 在「设置 → AI 供应商」配置 API Key 后，可获得 AI 智能分析总结。')
+                return
+            }
+
+            // 用 AI 总结
+            const prompt = `以下是我今天（${selectedDate}）的电脑使用活动统计数据：\n\n${rawSummary}\n\n请根据这些数据，用中文给我一个简洁友好的工作日总结，包括：\n1. 今天主要做了什么\n2. 时间利用的亮点或问题\n3. 一条具体的改进建议\n保持简短，不超过 150 字。`
+
+            const res = await fetch(`${aiCfg.config.baseUrl}/chat/completions`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    Authorization: `Bearer ${aiCfg.config.apiKey}`,
+                },
+                body: JSON.stringify({
+                    model: aiCfg.config.model,
+                    messages: [{ role: 'user', content: prompt }],
+                    max_tokens: 300,
+                }),
+            })
+
+            if (!res.ok) {
+                const err = await res.json().catch(() => ({}))
+                throw new Error(err?.error?.message || `HTTP ${res.status}`)
+            }
+
+            const data = await res.json()
+            const aiText = data.choices?.[0]?.message?.content || '（AI 未返回内容）'
+            setSummary(`## 📅 ${selectedDate} AI 总结\n\n${aiText}\n\n---\n\n${rawSummary}`)
+        } catch (error: any) {
             console.error('Failed to generate summary:', error)
-            setSummary('生成总结失败，请重试。')
+            setSummary(`生成总结失败：${error?.message || error}`)
         } finally {
             setGeneratingSummary(false)
         }

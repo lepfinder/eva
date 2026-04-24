@@ -12,7 +12,6 @@ import {
   Timer,
   MonitorPlay,
   Zap,
-  Box,
   BookOpen,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
@@ -21,7 +20,7 @@ import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from '@/comp
 import { Separator } from '@/components/ui/separator'
 import logoImage from '@/assets/logo.png'
 
-export type NavItem = 'dashboard' | 'navigation' | 'toolbox' | 'automation' | 'skillCenter' | 'cheatsheet' | 'vault' | 'clipboard' | 'timeauditor' | 'visualrecall' | 'settings'
+export type NavItem = 'dashboard' | 'navigation' | 'toolbox' | 'automation' | 'cheatsheet' | 'vault' | 'clipboard' | 'timeauditor' | 'visualrecall' | 'settings'
 
 interface SidebarProps {
   activeNav: NavItem
@@ -41,7 +40,6 @@ const navGroups = [
       { id: 'navigation', labelKey: 'nav.navigation', icon: <Compass className="h-5 w-5" /> },
       { id: 'automation', labelKey: 'nav.automation', icon: <Zap className="h-5 w-5" /> },
       { id: 'toolbox', labelKey: 'nav.toolbox', icon: <Wrench className="h-5 w-5" /> },
-      { id: 'skillCenter', labelKey: 'nav.skillCenter', icon: <Box className="h-5 w-5" /> },
       { id: 'cheatsheet', labelKey: 'nav.cheatsheet', icon: <BookOpen className="h-5 w-5" /> }
     ]
   },

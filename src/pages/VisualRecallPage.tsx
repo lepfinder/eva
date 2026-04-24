@@ -14,112 +14,94 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Dialog, DialogContent } from '@/components/ui/dialog'
-// Temporary fallback if hooks missing
-const useToast = () => ({ toast: (props: any) => console.log('Toast:', props) })
+import { invoke } from '@tauri-apps/api/core'
 import clsx from 'clsx'
 
-// 类型定义
+// 类型定义（与 Rust VrSnapshot camelCase 对应）
 interface Snapshot {
     id: number
     timestamp: number
-    app_name: string
-    window_title: string
-    screenshot_path: string
-    ocr_text?: string // Deprecated
-    imageUrl?: string // Injected by main process
+    appName: string
+    windowTitle: string
+    thumbPath: string
+    fullPath?: string
+}
+
+// 异步加载截图 data URL（与 ClipboardImage 相同模式）
+function SnapshotImage({ path, className }: { path: string; className?: string }) {
+    const [src, setSrc] = useState<string>('')
+    useEffect(() => {
+        if (!path) return
+        invoke<string>('visual_recall_get_image_data', { path })
+            .then(setSrc)
+            .catch(() => setSrc(''))
+    }, [path])
+    if (!src) return (
+        <div className={clsx('flex items-center justify-center bg-secondary/50', className)}>
+            <ImageIcon className="h-8 w-8 opacity-30 text-muted-foreground" />
+        </div>
+    )
+    return <img src={src} className={className} loading="lazy" />
 }
 
 export function VisualRecallPage() {
-    const { toast } = useToast()
-
     // 状态
     const [enabled, setEnabled] = useState(false)
     const [loading, setLoading] = useState(false)
     const [snapshots, setSnapshots] = useState<Snapshot[]>([])
-    const searchQuery = '' // Keeping as constant for now if we want to add search back later
     const [selectedSnapshot, setSelectedSnapshot] = useState<Snapshot | null>(null)
-    const [page, setPage] = useState(1)
     const [hasMore, setHasMore] = useState(true)
-    const [selectedDate, setSelectedDate] = useState<Date>(new Date()) // 日期选择
+    const [selectedDate, setSelectedDate] = useState<Date>(new Date())
     const PAGE_SIZE = 50
 
-    // 监听滚动加载的 ref
+    // 无限滚动 sentinel
     const observerTarget = useRef<HTMLDivElement>(null)
 
     // 初始加载配置
     useEffect(() => {
-        if (window.api.visualRecall) {
-            window.api.visualRecall.getConfig().then(config => {
-                setEnabled(config.enabled)
-            })
-        }
+        invoke<{ enabled: boolean }>('visual_recall_get_config').then(config => {
+            setEnabled(config.enabled)
+        }).catch(() => {})
     }, [])
 
-    // 加载数据
+    // 加载快照
     const loadSnapshots = useCallback(async (reset = false) => {
-        if (!window.api.visualRecall) return
-
         setLoading(true)
         try {
-            let results: any
-            if (searchQuery.trim()) {
-                // Search mode
-                results = await window.api.visualRecall.searchContent({
-                    query: searchQuery,
-                    limit: PAGE_SIZE
-                })
-                if (reset) {
-                    setSnapshots(results)
-                } else {
-                    setSnapshots(results)
-                }
-                setHasMore(false)
-            } else {
-                // List mode - 按日期过滤
-                const startOfDay = new Date(selectedDate)
-                startOfDay.setHours(0, 0, 0, 0)
-                const endOfDay = new Date(selectedDate)
-                endOfDay.setHours(23, 59, 59, 999)
+            const startOfDay = new Date(selectedDate)
+            startOfDay.setHours(0, 0, 0, 0)
+            const endOfDay = new Date(selectedDate)
+            endOfDay.setHours(23, 59, 59, 999)
 
-                // 分页时使用上一次最后一条的时间戳作为 endTime
-                const endTime = reset
-                    ? endOfDay.getTime()
-                    : (snapshots.length > 0 ? snapshots[snapshots.length - 1].timestamp - 1 : endOfDay.getTime())
+            const endTime = reset
+                ? endOfDay.getTime()
+                : (snapshots.length > 0
+                    ? snapshots[snapshots.length - 1].timestamp - 1
+                    : endOfDay.getTime())
 
-                const response = await window.api.visualRecall.searchSnapshots({
+            const response = await invoke<{ snapshots: Snapshot[]; total: number }>(
+                'visual_recall_search_snapshots',
+                {
                     startTime: startOfDay.getTime(),
-                    endTime: endTime,
-                    limit: PAGE_SIZE
-                })
-
-                if (reset) {
-                    setSnapshots(response.snapshots)
-                } else {
-                    // 去重
-                    const existingIds = new Set(snapshots.map(s => s.id))
-                    const newSnapshots = response.snapshots.filter(s => !existingIds.has(s.id))
-                    setSnapshots(prev => [...prev, ...newSnapshots])
+                    endTime,
+                    limit: PAGE_SIZE,
                 }
+            )
 
-                setHasMore(response.snapshots.length === PAGE_SIZE)
-                if (!reset && response.snapshots.length > 0) {
-                    setPage(p => p + 1)
-                }
+            if (reset) {
+                setSnapshots(response.snapshots)
+            } else {
+                const existingIds = new Set(snapshots.map(s => s.id))
+                const fresh = response.snapshots.filter(s => !existingIds.has(s.id))
+                setSnapshots(prev => [...prev, ...fresh])
             }
-        } catch (error) {
-            console.error('Failed to load snapshots:', error)
+            setHasMore(response.snapshots.length === PAGE_SIZE)
+        } catch (err) {
+            console.error('[VisualRecall] loadSnapshots failed:', err)
         } finally {
             setLoading(false)
         }
-    }, [page, snapshots, searchQuery, selectedDate])
-
-    // 搜索处理
-    useEffect(() => {
-        const timer = setTimeout(() => {
-            loadSnapshots(true)
-        }, 300) // Debounce
-        return () => clearTimeout(timer)
-    }, [searchQuery])
+    }, [snapshots, selectedDate])
 
     // 日期变化时重新加载
     useEffect(() => {
@@ -128,34 +110,24 @@ export function VisualRecallPage() {
 
     // 切换录制状态
     const toggleRecording = async () => {
-        if (!window.api.visualRecall) return
         const newState = !enabled
-        await window.api.visualRecall.setEnabled(newState)
+        await invoke('visual_recall_set_enabled', { enabled: newState })
         setEnabled(newState)
-        toast({
-            title: newState ? "视觉回溯已开启" : "视觉回溯已暂停",
-            description: newState ? "系统将自动记录屏幕快照" : "记录已停止",
-        })
     }
-
 
     // 无限滚动
     useEffect(() => {
         const observer = new IntersectionObserver(
             entries => {
-                if (entries[0].isIntersecting && hasMore && !loading && !searchQuery) {
+                if (entries[0].isIntersecting && hasMore && !loading) {
                     loadSnapshots(false)
                 }
             },
             { threshold: 1.0 }
         )
-
-        if (observerTarget.current) {
-            observer.observe(observerTarget.current)
-        }
-
+        if (observerTarget.current) observer.observe(observerTarget.current)
         return () => observer.disconnect()
-    }, [hasMore, loading, searchQuery, loadSnapshots])
+    }, [hasMore, loading, loadSnapshots])
 
 
     // 辅助函数
@@ -189,12 +161,10 @@ export function VisualRecallPage() {
             let key = date
             if (date === today) key = 'Today'
             else if (date === yesterday) key = 'Yesterday'
-
             if (!groups[key]) groups[key] = []
             groups[key].push(s)
         })
 
-        // Sort keys: Today first, then Yesterday, then others descending
         return Object.entries(groups).sort((a, b) => {
             if (a[0] === 'Today') return -1
             if (b[0] === 'Today') return 1
@@ -310,18 +280,10 @@ export function VisualRecallPage() {
                                         >
                                             <div className="aspect-video bg-muted relative overflow-hidden">
                                                 {/* Thumbnail */}
-                                                {snapshot.imageUrl ? (
-                                                    <img
-                                                        src={snapshot.imageUrl}
-                                                        alt={snapshot.window_title}
-                                                        className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
-                                                        loading="lazy"
-                                                    />
-                                                ) : (
-                                                    <div className="w-full h-full flex items-center justify-center text-muted-foreground bg-secondary/50">
-                                                        <ImageIcon className="h-8 w-8 opacity-50" />
-                                                    </div>
-                                                )}
+                                                <SnapshotImage
+                                                    path={snapshot.thumbPath}
+                                                    className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
+                                                />
 
                                                 {/* Timestamp Overlay */}
                                                 <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/90 via-black/50 to-transparent p-3 pt-8 flex justify-between items-end">
@@ -336,13 +298,13 @@ export function VisualRecallPage() {
                                             <CardContent className="p-3">
                                                 <div className="flex items-center justify-between gap-2">
                                                     <div className="flex items-center gap-2 min-w-0">
-                                                        <span className="text-sm font-semibold truncate text-foreground/90" title={snapshot.app_name}>
-                                                            {snapshot.app_name}
+                                                        <span className="text-sm font-semibold truncate text-foreground/90" title={snapshot.appName}>
+                                                            {snapshot.appName}
                                                         </span>
                                                     </div>
                                                 </div>
-                                                <p className="text-xs text-muted-foreground truncate mt-1 leading-relaxed" title={snapshot.window_title}>
-                                                    {snapshot.window_title}
+                                                <p className="text-xs text-muted-foreground truncate mt-1 leading-relaxed" title={snapshot.windowTitle}>
+                                                    {snapshot.windowTitle}
                                                 </p>
                                             </CardContent>
                                         </Card>
@@ -369,20 +331,19 @@ export function VisualRecallPage() {
                     {selectedSnapshot && (
                         <div className="relative w-full h-full flex items-center justify-center bg-black/95 group">
                             {/* Frosted Background */}
-                            {selectedSnapshot.imageUrl && (
-                                <div
-                                    className="absolute inset-0 bg-cover bg-center blur-3xl opacity-20 scale-110"
-                                    style={{ backgroundImage: `url(${selectedSnapshot.imageUrl})` }}
+                            {selectedSnapshot.thumbPath && (
+                                <SnapshotImage
+                                    path={selectedSnapshot.thumbPath}
+                                    className="absolute inset-0 w-full h-full object-cover blur-3xl opacity-20 scale-110"
                                 />
                             )}
 
                             {/* Main Image */}
                             <div className="relative z-10 w-full h-full flex flex-col">
                                 <div className="flex-1 flex items-center justify-center p-4">
-                                    {selectedSnapshot.imageUrl ? (
-                                        <img
-                                            src={selectedSnapshot.imageUrl.includes('?') ? selectedSnapshot.imageUrl + '&type=full' : selectedSnapshot.imageUrl + '?type=full'}
-                                            alt="Full size"
+                                    {selectedSnapshot.fullPath || selectedSnapshot.thumbPath ? (
+                                        <SnapshotImage
+                                            path={selectedSnapshot.fullPath ?? selectedSnapshot.thumbPath!}
                                             className="max-w-full max-h-full object-contain shadow-2xl rounded-sm"
                                         />
                                     ) : (
@@ -395,13 +356,13 @@ export function VisualRecallPage() {
                                     <div className="flex items-end justify-between max-w-5xl mx-auto w-full">
                                         <div className="space-y-1">
                                             <div className="flex items-center gap-3">
-                                                <h3 className="text-2xl font-bold tracking-tight drop-shadow-md">{selectedSnapshot.app_name}</h3>
+                                                <h3 className="text-2xl font-bold tracking-tight drop-shadow-md">{selectedSnapshot.appName}</h3>
                                                 <span className="px-2 py-0.5 rounded bg-white/20 backdrop-blur-md text-xs font-mono border border-white/10">
                                                     {formatTime(selectedSnapshot.timestamp)}
                                                 </span>
                                             </div>
                                             <p className="text-white/80 text-sm font-medium opacity-90 leading-relaxed max-w-2xl drop-shadow-sm">
-                                                {selectedSnapshot.window_title}
+                                                {selectedSnapshot.windowTitle}
                                             </p>
                                         </div>
                                     </div>

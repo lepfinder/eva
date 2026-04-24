@@ -6,6 +6,8 @@ import { Input } from '@/components/ui/input'
 import { Separator } from '@/components/ui/separator'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
 import { Switch } from '@/components/ui/switch'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { AiProviderSettings } from '@/components/AiProviderSettings'
 import { changeLanguage, getCurrentLanguage } from '@/i18n'
 import {
   Check,
@@ -23,7 +25,8 @@ import {
   Lock,
   Activity,
   FileText,
-  Wifi
+  Wifi,
+  Sparkles,
 } from 'lucide-react'
 
 // 存储统计类型
@@ -68,7 +71,7 @@ export function SettingsPage(): React.ReactElement {
   const [storageStats, setStorageStats] = useState<StorageStats | null>(null)
   const [loadingStorage, setLoadingStorage] = useState(false)
   const [settings, setSettings] = useState<any>(null)
-  const [activeTab, setActiveTab] = useState<'appearance' | 'security' | 'hotkeys' | 'network' | 'storage' | 'about'>('appearance')
+  const [activeTab, setActiveTab] = useState<'appearance' | 'security' | 'hotkeys' | 'network' | 'storage' | 'about' | 'ai'>('appearance')
 
   useEffect(() => {
     // 获取数据目录路径
@@ -189,6 +192,7 @@ export function SettingsPage(): React.ReactElement {
   const sidebarItems = [
     { id: 'appearance', label: t('settings.appearance.title'), icon: <MonitorPlay className="h-4 w-4" /> },
     { id: 'security', label: t('settings.security.title'), icon: <Lock className="h-4 w-4" /> },
+    { id: 'ai', label: 'AI 供应商', icon: <Sparkles className="h-4 w-4" /> },
     { id: 'hotkeys', label: '全局快捷键', icon: <Keyboard className="h-4 w-4" /> },
     { id: 'network', label: '网络代理', icon: <Wifi className="h-4 w-4" /> },
     { id: 'storage', label: '存储管理', icon: <HardDrive className="h-4 w-4" /> },
@@ -261,13 +265,18 @@ export function SettingsPage(): React.ReactElement {
                     {/* Terminal Font */}
                     <div className="space-y-2">
                       <label className="text-sm font-medium">{t('settings.appearance.terminalFont')}</label>
-                      <select className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2">
-                        <option value="JetBrains Mono">JetBrains Mono</option>
-                        <option value="Fira Code">Fira Code</option>
-                        <option value="SF Mono">SF Mono</option>
-                        <option value="Monaco">Monaco</option>
-                        <option value="Consolas">Consolas</option>
-                      </select>
+                      <Select defaultValue="JetBrains Mono">
+                        <SelectTrigger className="w-full">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="JetBrains Mono">JetBrains Mono</SelectItem>
+                          <SelectItem value="Fira Code">Fira Code</SelectItem>
+                          <SelectItem value="SF Mono">SF Mono</SelectItem>
+                          <SelectItem value="Monaco">Monaco</SelectItem>
+                          <SelectItem value="Consolas">Consolas</SelectItem>
+                        </SelectContent>
+                      </Select>
                     </div>
 
                     <div className="space-y-2">
@@ -299,6 +308,8 @@ export function SettingsPage(): React.ReactElement {
               </div>
             )}
 
+            {activeTab === 'ai' && <AiProviderSettings />}
+
             {activeTab === 'security' && (
               <div className="space-y-6 animate-in fade-in duration-300">
                 <Card>
@@ -317,21 +328,25 @@ export function SettingsPage(): React.ReactElement {
                           <p className="text-xs text-muted-foreground">{t('settings.security.vaultAutoLockDesc')}</p>
                         </div>
                         <div className="flex items-center gap-3">
-                          <select
-                            className="flex h-9 w-40 rounded-md border border-input bg-background px-3 py-1 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-                            value={settings?.vaultAutoLockMinutes || 5}
-                            onChange={(e) => handleSettingChange('vaultAutoLockMinutes', parseInt(e.target.value))}
+                          <Select
+                            value={String(settings?.vaultAutoLockMinutes || 5)}
+                            onValueChange={(v) => handleSettingChange('vaultAutoLockMinutes', parseInt(v))}
                           >
-                            <option value={1}>1 {t('settings.security.unitMinute')}</option>
-                            <option value={5}>5 {t('settings.security.unitMinute')}</option>
-                            <option value={10}>10 {t('settings.security.unitMinute')}</option>
-                            <option value={30}>30 {t('settings.security.unitMinute')}</option>
-                            <option value={60}>1 {t('settings.security.unitHour')}</option>
-                            <option value={120}>2 {t('settings.security.unitHour')}</option>
-                            <option value={240}>4 {t('settings.security.unitHour')}</option>
-                            <option value={480}>8 {t('settings.security.unitHour')}</option>
-                            <option value={720}>12 {t('settings.security.unitHour')}</option>
-                          </select>
+                            <SelectTrigger className="w-40">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="1">1 {t('settings.security.unitMinute')}</SelectItem>
+                              <SelectItem value="5">5 {t('settings.security.unitMinute')}</SelectItem>
+                              <SelectItem value="10">10 {t('settings.security.unitMinute')}</SelectItem>
+                              <SelectItem value="30">30 {t('settings.security.unitMinute')}</SelectItem>
+                              <SelectItem value="60">1 {t('settings.security.unitHour')}</SelectItem>
+                              <SelectItem value="120">2 {t('settings.security.unitHour')}</SelectItem>
+                              <SelectItem value="240">4 {t('settings.security.unitHour')}</SelectItem>
+                              <SelectItem value="480">8 {t('settings.security.unitHour')}</SelectItem>
+                              <SelectItem value="720">12 {t('settings.security.unitHour')}</SelectItem>
+                            </SelectContent>
+                          </Select>
                         </div>
                       </div>
                       <p className="text-xs text-muted-foreground">

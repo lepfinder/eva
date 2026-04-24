@@ -19,6 +19,8 @@ const DEFAULTS: Record<string, any> = {
   getListeningPorts: [],
   getMemoryAnalysis: { system: { total: 0, used: 0, available: 0, percent: 0, swapTotal: 0, swapUsed: 0 }, apps: [] },
   'env.detect': [],
+  'visual_recall_search_snapshots': { snapshots: [], total: 0 },
+  'visual_recall_get_config': { enabled: false, intervalSecs: 10, maxStorageMb: 2048 },
 }
 
 function readDefault(path: string): any {
@@ -161,6 +163,32 @@ const clipboardApi: Record<string, AnyFn> = {
   },
 }
 
+// Vault
+const vaultApi: Record<string, AnyFn> = {
+  vaultCanUseBiometric: () => invoke('vault_can_use_biometric'),
+  vaultUnlock: async () => {
+    try {
+      // 先弹出 Touch ID 窗口（Rust 侧同步等待结果）
+      const ok = await invoke<boolean>('vault_prompt_biometric', { reason: '解锁 EVA 保险箱' })
+      if (!ok) {
+        // 用户取消或失败 → 回退到密码
+        return { success: false, needPassword: true }
+      }
+      return invoke('vault_unlock_with_biometric')
+    } catch {
+      return { success: false, needPassword: true }
+    }
+  },
+  vaultHasPassword: () => invoke('vault_has_password'),
+  vaultUnlockWithPassword: (password: string) =>
+    invoke('vault_unlock_with_password', { password }),
+  vaultSetPassword: (password: string) => invoke('vault_set_password', { password }),
+  vaultLock: () => invoke('vault_lock'),
+  vaultSave: (data: any) => invoke('vault_save', { data }),
+  vaultSetContentProtection: (_enabled: boolean) => Promise.resolve(), // no-op in Eva
+  vaultImportFromSuperDashboard: () => invoke('vault_import_from_super_dashboard'),
+}
+
 // Activity Tracker
 const activityApi: Record<string, AnyFn> = {
   getTodayStats: (date?: string) => invoke('activity_get_today_stats', { date }),
@@ -187,6 +215,7 @@ export function initDesktopBridge(): void {
       if (key in navigationApi) return navigationApi[key]
       if (key in settingsApi) return settingsApi[key]
       if (key in toolsApi) return toolsApi[key]
+      if (key in vaultApi) return vaultApi[key]
       if (key === 'env') return envApi
       if (key === 'app') return appApi
       if (key === 'clipboard') return clipboardApi

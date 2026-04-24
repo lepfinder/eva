@@ -5,6 +5,8 @@ pub mod local_ports;
 pub mod memory_analyzer;
 pub mod navigation;
 pub mod settings;
+pub mod vault;
+pub mod visual_recall;
 
 use tauri::Manager;
 
@@ -29,6 +31,14 @@ pub fn run() {
             // Initialise activity tracker (creates DB, starts polling)
             let activity_state = activity_tracker::init(app.handle());
             app.manage(activity_state);
+
+            // Initialise vault
+            let vault_state = vault::init(app.handle());
+            app.manage(vault_state);
+
+            // Initialise visual recall
+            let vr_state = visual_recall::init(app.handle());
+            app.manage(vr_state);
 
             Ok(())
         })
@@ -91,6 +101,26 @@ pub fn run() {
             activity_tracker::activity_generate_summary,
             activity_tracker::activity_get_heatmap_data,
             activity_tracker::activity_rebuild_daily_stats,
+            // Vault
+            vault::vault_can_use_biometric,
+            vault::vault_unlock,
+            vault::vault_has_password,
+            vault::vault_unlock_with_password,
+            vault::vault_set_password,
+            vault::vault_lock,
+            vault::vault_save,
+            vault::vault_set_content_protection,
+            vault::vault_import_from_super_dashboard,
+            vault::vault_unlock_with_biometric,
+            vault::vault_prompt_biometric,
+            // VisualRecall
+            visual_recall::visual_recall_get_config,
+            visual_recall::visual_recall_set_enabled,
+            visual_recall::visual_recall_update_config,
+            visual_recall::visual_recall_search_snapshots,
+            visual_recall::visual_recall_get_storage_stats,
+            visual_recall::visual_recall_cleanup,
+            visual_recall::visual_recall_get_image_data,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

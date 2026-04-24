@@ -83,6 +83,52 @@
     font-size: 12px;
   }
 
+  /* Global native form controls */
+  input,
+  select,
+  textarea {
+    @apply w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground shadow-sm transition-colors;
+    @apply placeholder:text-muted-foreground;
+    @apply focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 focus:ring-offset-background;
+  }
+
+  input[type="checkbox"],
+  input[type="radio"] {
+    @apply h-4 w-4 rounded border-input text-primary;
+    @apply focus:ring-2 focus:ring-ring focus:ring-offset-2 focus:ring-offset-background;
+  }
+
+  input[type="checkbox"] {
+    accent-color: hsl(var(--primary));
+  }
+
+  input[type="radio"] {
+    accent-color: hsl(var(--primary));
+  }
+
+  select {
+    @apply pr-8;
+  }
+
+  textarea {
+    @apply min-h-[88px] resize-y;
+  }
+
+  label {
+    @apply text-sm font-medium text-foreground;
+  }
+
+  input:disabled,
+  select:disabled,
+  textarea:disabled {
+    @apply cursor-not-allowed opacity-60;
+  }
+
+  input::file-selector-button {
+    @apply mr-3 rounded-md border border-input bg-muted px-3 py-1.5 text-xs font-medium text-foreground;
+    @apply hover:bg-accent hover:text-accent-foreground;
+  }
+
   /* Custom scrollbar for dark mode */
   ::-webkit-scrollbar {
     width: 8px;
