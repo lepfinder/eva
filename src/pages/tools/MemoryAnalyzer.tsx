@@ -29,9 +29,9 @@ interface ProcessDetail {
 
 interface AppMemoryGroup {
     name: string
-    total_rss: number
-    formatted_rss: string
-    process_count: number
+    totalRss: number
+    formattedRss: string
+    processCount: number
     icon?: string
     processes: ProcessDetail[]
 }
@@ -41,10 +41,10 @@ interface SystemMemoryInfo {
     used: number
     available: number
     percent: number
-    swap_total: number
-    swap_used: number
+    swapTotal: number
+    swapUsed: number
     // macOS 特有字段
-    app_memory?: number
+    appMemory?: number
     wired?: number
     compressed?: number
     cached?: number
@@ -55,6 +55,47 @@ interface SystemMemoryInfo {
 interface MemoryAnalysisResult {
     system: SystemMemoryInfo
     apps: AppMemoryGroup[]
+}
+
+function toNumber(value: unknown, fallback = 0): number {
+    return typeof value === 'number' && Number.isFinite(value) ? value : fallback
+}
+
+function normalizeMemoryResult(raw: any): MemoryAnalysisResult {
+    const systemRaw = raw?.system ?? {}
+    const appsRaw = Array.isArray(raw?.apps) ? raw.apps : []
+
+    const system: SystemMemoryInfo = {
+        total: toNumber(systemRaw.total),
+        used: toNumber(systemRaw.used),
+        available: toNumber(systemRaw.available),
+        percent: toNumber(systemRaw.percent),
+        swapTotal: toNumber(systemRaw.swapTotal ?? systemRaw.swap_total),
+        swapUsed: toNumber(systemRaw.swapUsed ?? systemRaw.swap_used),
+        appMemory: toNumber(systemRaw.appMemory ?? systemRaw.app_memory),
+        wired: toNumber(systemRaw.wired),
+        compressed: toNumber(systemRaw.compressed),
+        cached: toNumber(systemRaw.cached),
+        active: toNumber(systemRaw.active),
+        inactive: toNumber(systemRaw.inactive),
+    }
+
+    const apps: AppMemoryGroup[] = appsRaw.map((app: any) => ({
+        name: String(app?.name ?? ''),
+        totalRss: toNumber(app?.totalRss ?? app?.total_rss),
+        formattedRss: String(app?.formattedRss ?? app?.formatted_rss ?? formatBytes(toNumber(app?.totalRss ?? app?.total_rss))),
+        processCount: toNumber(app?.processCount ?? app?.process_count),
+        icon: app?.icon,
+        processes: Array.isArray(app?.processes)
+            ? app.processes.map((proc: any) => ({
+                pid: toNumber(proc?.pid),
+                name: String(proc?.name ?? ''),
+                rss: toNumber(proc?.rss),
+            }))
+            : [],
+    }))
+
+    return { system, apps }
 }
 
 // Treemap 数据格式
@@ -227,8 +268,8 @@ interface AppDetailPanelProps {
 function AppDetailPanel({ app, onClose }: AppDetailPanelProps): React.ReactElement | null {
     if (!app) return null
 
-    const isHighMemory = app.total_rss > 2 * 1024 ** 3
-    const isMediumMemory = app.total_rss > 1 * 1024 ** 3
+    const isHighMemory = app.totalRss > 2 * 1024 ** 3
+    const isMediumMemory = app.totalRss > 1 * 1024 ** 3
 
     return (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm" onClick={onClose}>
@@ -248,7 +289,7 @@ function AppDetailPanel({ app, onClose }: AppDetailPanelProps): React.ReactEleme
                             <div>
                                 <CardTitle className="text-lg">{app.name}</CardTitle>
                                 <p className="text-sm text-muted-foreground mt-0.5">
-                                    {app.process_count} 个进程
+                                    {app.processCount} 个进程
                                 </p>
                             </div>
                         </div>
@@ -257,7 +298,7 @@ function AppDetailPanel({ app, onClose }: AppDetailPanelProps): React.ReactEleme
                                 isMediumMemory ? 'text-orange-500' :
                                     'text-primary'
                                 }`}>
-                                {app.formatted_rss}
+                                {app.formattedRss}
                             </span>
                             <Button variant="ghost" size="icon" onClick={onClose} className="h-8 w-8">
                                 <X className="h-4 w-4" />
@@ -277,7 +318,7 @@ function AppDetailPanel({ app, onClose }: AppDetailPanelProps): React.ReactEleme
                         </thead>
                         <tbody>
                             {app.processes.map((proc, index) => {
-                                const percentage = ((proc.rss / app.total_rss) * 100).toFixed(1)
+                                const percentage = ((proc.rss / app.totalRss) * 100).toFixed(1)
                                 return (
                                     <tr
                                         key={proc.pid}
@@ -332,8 +373,8 @@ interface AppItemProps {
 }
 
 function AppItem({ app, isExpanded, onToggle, index, colorIndex }: AppItemProps): React.ReactElement {
-    const isHighMemory = app.total_rss > 2 * 1024 ** 3
-    const isMediumMemory = app.total_rss > 1 * 1024 ** 3
+    const isHighMemory = app.totalRss > 2 * 1024 ** 3
+    const isMediumMemory = app.totalRss > 1 * 1024 ** 3
 
     return (
         <div className="border-b last:border-b-0">
@@ -377,7 +418,7 @@ function AppItem({ app, isExpanded, onToggle, index, colorIndex }: AppItemProps)
 
                 {/* 进程数 */}
                 <span className="text-xs text-muted-foreground bg-muted px-2 py-0.5 rounded">
-                    {app.process_count} 进程
+                    {app.processCount} 进程
                 </span>
 
                 {/* 内存占用 */}
@@ -389,7 +430,7 @@ function AppItem({ app, isExpanded, onToggle, index, colorIndex }: AppItemProps)
                             : 'text-primary'
                         }`}
                 >
-                    {app.formatted_rss}
+                    {app.formattedRss}
                 </span>
             </button>
 
@@ -446,8 +487,8 @@ export function MemoryAnalyzer(): React.ReactElement {
         setError(null)
 
         try {
-            const result: MemoryAnalysisResult = await (window as any).api.getMemoryAnalysis()
-            setData(result)
+            const result = await (window as any).api.getMemoryAnalysis()
+            setData(normalizeMemoryResult(result))
         } catch (err) {
             console.error('Memory scan failed:', err)
             setError(err instanceof Error ? err.message : '扫描失败')
@@ -488,10 +529,10 @@ export function MemoryAnalyzer(): React.ReactElement {
     const treemapData: TreemapData[] = data
         ? data.apps.slice(0, 10).map((app, index) => ({
             name: app.name,
-            size: app.total_rss,
-            formatted: app.formatted_rss,
+            size: app.totalRss,
+            formatted: app.formattedRss,
             fill: getColorByIndex(index),
-            processCount: app.process_count
+            processCount: app.processCount
         }))
         : []
 
@@ -606,7 +647,7 @@ export function MemoryAnalyzer(): React.ReactElement {
                                     <div>
                                         <p className="text-xs text-muted-foreground">App 内存</p>
                                         <p className="text-lg font-semibold text-blue-500">
-                                            {formatBytes(data.system.app_memory || 0)}
+                                            {formatBytes(data.system.appMemory || 0)}
                                         </p>
                                     </div>
                                     <div>
@@ -642,11 +683,11 @@ export function MemoryAnalyzer(): React.ReactElement {
                                 <div className="space-y-3">
                                     <div>
                                         <p className="text-xs text-muted-foreground">交换内存 (Swap)</p>
-                                        <p className={`text-lg font-semibold ${data.system.swap_used > 0 ? 'text-orange-500' : 'text-muted-foreground'}`}>
-                                            {formatBytes(data.system.swap_used)}
+                                        <p className={`text-lg font-semibold ${data.system.swapUsed > 0 ? 'text-orange-500' : 'text-muted-foreground'}`}>
+                                            {formatBytes(data.system.swapUsed)}
                                         </p>
                                         <p className="text-[10px] text-muted-foreground">
-                                            / {formatBytes(data.system.swap_total)}
+                                            / {formatBytes(data.system.swapTotal)}
                                         </p>
                                     </div>
                                     <div>
