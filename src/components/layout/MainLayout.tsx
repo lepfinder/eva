@@ -10,7 +10,6 @@ import { ClipboardHistoryPage } from '@/pages/ClipboardHistoryPage'
 import { TimeAuditorPage } from '@/pages/TimeAuditorPage'
 import { VisualRecallPage } from '@/pages/VisualRecallPage'
 import { AutomationPage } from '@/pages/AutomationPage'
-import { CheatSheetPage } from '@/pages/CheatSheetPage'
 
 import {
   AlertDialog,
@@ -30,7 +29,6 @@ const NAV_TITLE_MAP: Record<NavItem, string> = {
   navigation: '网站导航',
   toolbox: '工具箱',
   automation: '自动化工具',
-  cheatsheet: '速查表',
   vault: '安全保险箱',
   clipboard: '剪贴板历史',
   timeauditor: '时间审计',
@@ -169,8 +167,6 @@ export function MainLayoutContents(): React.ReactElement {
         return <ToolboxPage onSubTitleChange={setSubTitle} />
       case 'automation':
         return <AutomationPage />
-      case 'cheatsheet':
-        return <CheatSheetPage />
       case 'vault':
         return <VaultPage />
       case 'clipboard':
@@ -187,7 +183,7 @@ export function MainLayoutContents(): React.ReactElement {
     }
   }
 
-  const isFullHeightPage = activeNav === 'dashboard' || activeNav === 'navigation' || activeNav === 'toolbox' || activeNav === 'automation' || activeNav === 'cheatsheet' || activeNav === 'vault' || activeNav === 'clipboard' || activeNav === 'timeauditor' || activeNav === 'visualrecall'
+  const isFullHeightPage = activeNav === 'dashboard' || activeNav === 'navigation' || activeNav === 'toolbox' || activeNav === 'automation' || activeNav === 'vault' || activeNav === 'clipboard' || activeNav === 'timeauditor' || activeNav === 'visualrecall'
 
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-background">

@@ -320,11 +320,18 @@ pub fn start_polling(app: AppHandle, state: SharedClipboardState) {
             }
         };
 
+        // Image extraction/hashing is expensive for large clipboard images.
+        // Keep text polling at 1s, but only run image polling every 5s.
+        const IMAGE_POLL_EVERY_TICKS: u64 = 5;
+        let mut tick: u64 = 0;
+
         loop {
             std::thread::sleep(Duration::from_secs(1));
+            tick = tick.saturating_add(1);
 
-            // --- Try image first
-            if let Ok(img) = cb.get_image() {
+            // --- Try image first (throttled)
+            if tick % IMAGE_POLL_EVERY_TICKS == 0 {
+                if let Ok(img) = cb.get_image() {
                 // Hash raw RGBA bytes — consistent with clipboard_write_to_clipboard
                 let rgba_bytes = img.bytes.clone().into_owned();
                 let hash = image_hash(&rgba_bytes);
@@ -379,6 +386,7 @@ pub fn start_polling(app: AppHandle, state: SharedClipboardState) {
                         }
                     }
                     continue; // processed image, skip text check
+                }
                 }
             }
 

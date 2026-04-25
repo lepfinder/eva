@@ -2,7 +2,7 @@
  * 工具箱页面
  */
 import { useState, useEffect } from 'react'
-import { FileJson, ArrowLeft, Activity, ListFilter, GitBranch, Clock, Key, Database, Radio, SearchCode, Pipette } from 'lucide-react'
+import { FileJson, ArrowLeft, Activity, ListFilter, GitBranch, Clock, Key, Database, Radio, SearchCode, Pipette, BookOpen } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { JsonFormatter } from './tools/JsonFormatter'
@@ -15,9 +15,10 @@ import { SqlGenerator } from './tools/SqlGenerator'
 import { LocalPorts } from './tools/LocalPorts'
 import { EnvDetector } from './tools/EnvDetector'
 import { ColorPicker } from './tools/ColorPicker'
+import { CheatSheetPage } from './CheatSheetPage'
 import { recordToolUsage } from '@/utils/toolUsage'
 
-export type ToolType = 'list' | 'json-formatter' | 'memory-analyzer' | 'list-dedup' | 'set-ops' | 'timestamp' | 'password-generator' | 'sql-generator' | 'local-ports' | 'env-detector' | 'color-picker'
+export type ToolType = 'list' | 'json-formatter' | 'memory-analyzer' | 'list-dedup' | 'set-ops' | 'timestamp' | 'password-generator' | 'sql-generator' | 'local-ports' | 'env-detector' | 'color-picker' | 'cheatsheet'
 
 export interface ToolConfig {
     id: ToolType
@@ -86,6 +87,12 @@ export const tools: ToolConfig[] = [
         title: '环境探测',
         description: '自动识别本机开发环境，包括工具版本与路径',
         icon: <SearchCode className="h-8 w-8" />
+    },
+    {
+        id: 'cheatsheet',
+        title: '速查表',
+        description: '常用软件命令与操作速查索引',
+        icon: <BookOpen className="h-8 w-8" />
     }
 ]
 
@@ -101,7 +108,8 @@ const TOOL_TITLE_MAP: Record<ToolType, string> = {
     'sql-generator': 'SQL 生成工具',
     'local-ports': '本地监听端口',
     'env-detector': '环境探测',
-    'color-picker': '拾色器'
+    'color-picker': '拾色器',
+    'cheatsheet': '速查表'
 }
 
 interface ToolboxPageProps {
@@ -220,6 +228,7 @@ export function ToolboxPage({ onSubTitleChange }: ToolboxPageProps): React.React
                     {currentTool === 'local-ports' && <LocalPorts />}
                     {currentTool === 'env-detector' && <EnvDetector />}
                     {currentTool === 'color-picker' && <ColorPicker />}
+                    {currentTool === 'cheatsheet' && <CheatSheetPage />}
                 </div>
             </div>
         )
