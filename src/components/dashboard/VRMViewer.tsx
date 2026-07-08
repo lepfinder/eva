@@ -29,9 +29,11 @@ export function VRMViewer({
   const entranceRef = useRef({ active: false, elapsed: 0, duration: 1.6 })
 
   useEffect(() => {
-    console.log('[VRMViewer] Initializing with path:', modelPath);
     if (!containerRef.current) return
+    
+    let handleResize: (() => void) | undefined;
 
+    try {
     // 1. Scene Setup
     const scene = new THREE.Scene()
     sceneRef.current = scene
@@ -58,7 +60,7 @@ export function VRMViewer({
     renderer.setClearColor(0x000000, 0)
 
     // 适配 Three.js 色彩空间 (v152+)
-    renderer.outputColorSpace = THREE.SRGBColorSpace
+    // renderer.outputColorSpace = THREE.SRGBColorSpace
 
     containerRef.current.appendChild(renderer.domElement)
     rendererRef.current = renderer
@@ -111,23 +113,23 @@ export function VRMViewer({
     const loader = new GLTFLoader()
 
     // Explicitly configure loaders to avoid blob URL revocation issues in React StrictMode
-    loader.setPath('')
 
     loader.register((parser) => {
       return new VRMLoaderPlugin(parser)
     })
 
     console.log('[VRMViewer] Start loading VRM:', modelPath)
-
-    // 强制使用 ImageLoader 后备方案而非 ImageBitmap，解决 Electron 下极大概率发生的 createImageBitmap 崩溃
-    const originalCreateImageBitmap = window.createImageBitmap
-    // @ts-ignore
-    window.createImageBitmap = undefined
+    
+    // 增加一个预检，看看文件是否能被 fetch 到
+    fetch(modelPath).then(res => {
+      console.log(`[VRMViewer] Fetch pre-check for ${modelPath}:`, res.status, res.statusText);
+    }).catch(err => {
+      console.error(`[VRMViewer] Fetch pre-check failed for ${modelPath}:`, err);
+    });
 
     loader.load(
       modelPath,
       (gltf) => {
-        window.createImageBitmap = originalCreateImageBitmap;
         const vrm = gltf.userData.vrm as VRM
         if (!vrm) {
           setError('Failed to load VRM data from GLTF')
@@ -198,9 +200,17 @@ export function VRMViewer({
         }
       },
       (error) => {
-        window.createImageBitmap = originalCreateImageBitmap;
         console.error('[VRMViewer] Error loading VRM:', error)
-        setError(error instanceof Error ? error.message : String(error))
+        let errorMsg = 'Load failed';
+        if (error instanceof Error) {
+          errorMsg = error.message;
+        } else if (error instanceof ProgressEvent) {
+          const status = (error.target as XMLHttpRequest)?.status;
+          errorMsg = `Network Error (Status: ${status || 'Unknown'})`;
+        } else {
+          errorMsg = `Error: ${String(error)}`;
+        }
+        setError(errorMsg)
         setLoading(false)
       }
     )
@@ -319,7 +329,7 @@ export function VRMViewer({
     animate()
 
     // 8. Resize Handling
-    const handleResize = () => {
+    handleResize = () => {
       if (!containerRef.current || !cameraRef.current || !rendererRef.current) return
 
       const width = containerRef.current.clientWidth
@@ -332,9 +342,16 @@ export function VRMViewer({
 
     window.addEventListener('resize', handleResize)
 
+    } catch (e) {
+      console.error('[VRMViewer] Setup Error:', e);
+      setError(e instanceof Error ? e.message : String(e));
+    }
+
     // Cleanup
     return () => {
-      window.removeEventListener('resize', handleResize)
+      if (handleResize) {
+        window.removeEventListener('resize', handleResize)
+      }
       if (requestRef.current) {
         cancelAnimationFrame(requestRef.current)
       }

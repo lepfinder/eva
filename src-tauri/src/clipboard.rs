@@ -15,8 +15,10 @@ use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use std::process::Command;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager};
+use url::Url;
 use uuid::Uuid;
 
 // ──────────────────────────────────────────────────
@@ -54,6 +56,11 @@ pub struct ClipboardState {
     image_dir: PathBuf,
     last_text: String,
     last_image_hash: String,
+    last_url_detected: String,
+    /// Absolute timestamp (ms) until which the polling thread should NOT record
+    /// a new image entry.  Set whenever we write an image back to the clipboard
+    /// from history, so the polling thread doesn't immediately re-record it.
+    image_write_cooldown_until: u64,
 }
 
 impl ClipboardState {
@@ -92,6 +99,8 @@ impl ClipboardState {
             image_dir,
             last_text: String::new(),
             last_image_hash: String::new(),
+            last_url_detected: String::new(),
+            image_write_cooldown_until: 0,
         })
     }
 
@@ -220,6 +229,131 @@ fn generate_preview(content: &str, max_len: usize) -> String {
     }
 }
 
+fn is_http_url(text: &str) -> bool {
+    let trimmed = text.trim();
+    if trimmed.is_empty() || trimmed.contains(char::is_whitespace) {
+        return false;
+    }
+
+    Url::parse(trimmed)
+        .map(|url| matches!(url.scheme(), "http" | "https") && url.has_host())
+        .unwrap_or(false)
+}
+
+fn maybe_emit_url_detected(app: &AppHandle, state: &SharedClipboardState, text: &str) {
+    let trimmed = text.trim();
+    if !is_http_url(trimmed) {
+        return;
+    }
+
+    let should_emit = {
+        let mut guard = match state.lock() {
+            Ok(g) => g,
+            Err(_) => return,
+        };
+
+        if guard.last_url_detected == trimmed {
+            false
+        } else {
+            guard.last_url_detected = trimmed.to_string();
+            true
+        }
+    };
+
+    if should_emit {
+        let _ = app.emit("clipboard:url-detected", trimmed.to_string());
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn get_source_app() -> String {
+    let script = r#"tell application \"System Events\"
+    set frontApp to name of first application process whose frontmost is true
+end tell
+return frontApp"#;
+
+    Command::new("osascript")
+        .arg("-e")
+        .arg(script)
+        .output()
+        .ok()
+        .and_then(|out| {
+            if out.status.success() {
+                let app = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                if app.is_empty() {
+                    None
+                } else {
+                    Some(app)
+                }
+            } else {
+                None
+            }
+        })
+        .unwrap_or_else(|| "Unknown".to_string())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn get_source_app() -> String {
+    "Unknown".to_string()
+}
+
+#[cfg(target_os = "macos")]
+fn nsstring(value: &str) -> Option<*mut objc::runtime::Object> {
+    use objc::runtime::Object;
+    use objc::{class, msg_send, sel, sel_impl};
+    use std::ffi::CString;
+    use std::os::raw::c_char;
+
+    let c_string = CString::new(value).ok()?;
+    let ns_string: *mut Object = unsafe {
+        msg_send![class!(NSString), stringWithUTF8String: c_string.as_ptr() as *const c_char]
+    };
+    if ns_string.is_null() {
+        None
+    } else {
+        Some(ns_string)
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn nsstring_to_string(value: *mut objc::runtime::Object) -> Option<String> {
+    use objc::runtime::Object;
+    use objc::{msg_send, sel, sel_impl};
+    use std::ffi::CStr;
+    use std::os::raw::c_char;
+
+    if value.is_null() {
+        return None;
+    }
+
+    let c_str: *const c_char = unsafe { msg_send![value as *mut Object, UTF8String] };
+    if c_str.is_null() {
+        None
+    } else {
+        Some(unsafe { CStr::from_ptr(c_str) }.to_string_lossy().into_owned())
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn read_clipboard_html() -> Option<String> {
+    use objc::runtime::Object;
+    use objc::{class, msg_send, sel, sel_impl};
+
+    let pasteboard: *mut Object = unsafe { msg_send![class!(NSPasteboard), generalPasteboard] };
+    if pasteboard.is_null() {
+        return None;
+    }
+
+    let html_type = nsstring("public.html")?;
+    let html_value: *mut Object = unsafe { msg_send![pasteboard, stringForType: html_type] };
+    nsstring_to_string(html_value).filter(|html| !html.trim().is_empty())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn read_clipboard_html() -> Option<String> {
+    None
+}
+
 fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -320,24 +454,18 @@ pub fn start_polling(app: AppHandle, state: SharedClipboardState) {
             }
         };
 
-        // Image extraction/hashing is expensive for large clipboard images.
-        // Keep text polling at 1s, but only run image polling every 5s.
-        const IMAGE_POLL_EVERY_TICKS: u64 = 5;
-        let mut tick: u64 = 0;
-
         loop {
             std::thread::sleep(Duration::from_secs(1));
-            tick = tick.saturating_add(1);
 
-            // --- Try image first (throttled)
-            if tick % IMAGE_POLL_EVERY_TICKS == 0 {
-                if let Ok(img) = cb.get_image() {
-                // Hash raw RGBA bytes — consistent with clipboard_write_to_clipboard
+            // --- Try image first
+            if let Ok(img) = cb.get_image() {
                 let rgba_bytes = img.bytes.clone().into_owned();
-                let hash = image_hash(&rgba_bytes);
 
+                // Convert RGBA → PNG first, then hash the PNG bytes.
+                // PNG encoding is deterministic: same pixels always produce identical bytes,
+                // which means the hash is stable across repeated reads of the same clipboard
+                // image (raw RGBA bytes can vary on macOS due to alpha premultiplication).
                 let png_data: Vec<u8> = {
-                    // Convert RGBA ImageData → PNG bytes
                     use image::{ImageBuffer, Rgba};
                     let buf: ImageBuffer<Rgba<u8>, _> =
                         ImageBuffer::from_raw(img.width as u32, img.height as u32, rgba_bytes)
@@ -350,43 +478,63 @@ pub fn start_polling(app: AppHandle, state: SharedClipboardState) {
                     png_bytes
                 };
 
-                if png_data.is_empty() {
-                    // fall through to text check
-                } else {
-                    let mut guard = match state.lock() {
+                if !png_data.is_empty() {
+                    // Check cooldown first (set when we write an image back to clipboard).
+                    // Hash-based dedup is unreliable on macOS because arboard applies
+                    // alpha-premultiplication on read-back, producing different RGBA bytes.
+                    {
+                        let guard = match state.lock() {
+                            Ok(g) => g,
+                            Err(_) => continue,
+                        };
+                        if now_ms() < guard.image_write_cooldown_until {
+                            continue;
+                        }
+                    }
+
+                    // Hash PNG bytes for same-image dedup (e.g. user didn't copy anything new).
+                    let hash = image_hash(&png_data);
+                    {
+                        let mut guard = match state.lock() {
+                            Ok(g) => g,
+                            Err(_) => continue,
+                        };
+                        if hash == guard.last_image_hash {
+                            continue;
+                        }
+                        guard.last_image_hash = hash;
+                    }
+
+                    let source_app = get_source_app();
+                    let guard = match state.lock() {
                         Ok(g) => g,
                         Err(_) => continue,
                     };
 
-                    if hash != guard.last_image_hash {
-                        guard.last_image_hash = hash;
+                    // Save PNG file
+                    let filename = format!("{}-{}.png", now_ms(), &Uuid::new_v4().to_string()[..8]);
+                    let filepath = guard.image_dir.join(&filename);
+                    if fs::write(&filepath, &png_data).is_ok() {
+                        let path_str = filepath.to_string_lossy().to_string();
+                        let item = ClipboardItem {
+                            id: Uuid::new_v4().to_string(),
+                            item_type: "image".to_string(),
+                            content: path_str.clone(),
+                            preview: format!("Image {}x{}", img.width, img.height),
+                            source_app,
+                            timestamp: now_ms(),
+                            image_path: Some(path_str),
+                            language: None,
+                            color_value: None,
+                        };
 
-                        // Save PNG file
-                        let filename = format!("{}-{}.png", now_ms(), &Uuid::new_v4().to_string()[..8]);
-                        let filepath = guard.image_dir.join(&filename);
-                        if fs::write(&filepath, &png_data).is_ok() {
-                            let path_str = filepath.to_string_lossy().to_string();
-                            let item = ClipboardItem {
-                                id: Uuid::new_v4().to_string(),
-                                item_type: "image".to_string(),
-                                content: path_str.clone(),
-                                preview: format!("Image ({} bytes)", png_data.len()),
-                                source_app: "Unknown".to_string(),
-                                timestamp: now_ms(),
-                                image_path: Some(path_str),
-                                language: None,
-                                color_value: None,
-                            };
-
-                            if let Some(conn) = guard.db() {
-                                let _ = db_insert(conn, &item);
-                                db_cleanup(conn, &guard.image_dir.clone());
-                            }
-                            let _ = app.emit("clipboard:newItem", &item);
+                        if let Some(conn) = guard.db() {
+                            let _ = db_insert(conn, &item);
+                            db_cleanup(conn, &guard.image_dir.clone());
                         }
+                        let _ = app.emit("clipboard:newItem", &item);
                     }
                     continue; // processed image, skip text check
-                }
                 }
             }
 
@@ -395,34 +543,49 @@ pub fn start_polling(app: AppHandle, state: SharedClipboardState) {
                 if text.is_empty() {
                     continue;
                 }
-                let mut guard = match state.lock() {
-                    Ok(g) => g,
-                    Err(_) => continue,
+                {
+                    let mut guard = match state.lock() {
+                        Ok(g) => g,
+                        Err(_) => continue,
+                    };
+
+                    if text == guard.last_text {
+                        continue;
+                    }
+                    guard.last_text = text.clone();
+                }
+
+                let html = read_clipboard_html();
+                let detected = detect_type(&text);
+                let item_type = if detected.item_type == "text" && html.as_ref().is_some_and(|value| value.len() > text.len()) {
+                    "html"
+                } else {
+                    detected.item_type
                 };
 
-                if text == guard.last_text {
-                    continue;
-                }
-                guard.last_text = text.clone();
-
-                let detected = detect_type(&text);
                 let item = ClipboardItem {
                     id: Uuid::new_v4().to_string(),
-                    item_type: detected.item_type.to_string(),
+                    item_type: item_type.to_string(),
                     content: text.clone(),
                     preview: generate_preview(&text, 200),
-                    source_app: "Unknown".to_string(),
+                    source_app: get_source_app(),
                     timestamp: now_ms(),
                     image_path: None,
                     language: detected.language.map(str::to_string),
                     color_value: detected.color_value,
                 };
 
+                let guard = match state.lock() {
+                    Ok(g) => g,
+                    Err(_) => continue,
+                };
                 if let Some(conn) = guard.db() {
                     let _ = db_insert(conn, &item);
                     db_cleanup(conn, &guard.image_dir.clone());
                 }
                 let _ = app.emit("clipboard:newItem", &item);
+                drop(guard);
+                maybe_emit_url_detected(&app, &state, &text);
             }
         }
     });
@@ -450,7 +613,9 @@ pub fn clipboard_get_items(
     let offset = offset.unwrap_or(0);
 
     let mut stmt = match conn.prepare(
-        "SELECT id, type, content, preview, source_app, timestamp, image_path, language, color_value
+        "SELECT id, type,
+                CASE WHEN type = 'image' THEN content ELSE substr(content, 1, 1200) END AS content,
+                preview, source_app, timestamp, image_path, language, color_value
          FROM clipboard_items ORDER BY timestamp DESC LIMIT ?1 OFFSET ?2",
     ) {
         Ok(s) => s,
@@ -487,7 +652,9 @@ pub fn clipboard_search_items(
     let pattern = format!("%{}%", query);
 
     let mut stmt = match conn.prepare(
-        "SELECT id, type, content, preview, source_app, timestamp, image_path, language, color_value
+        "SELECT id, type,
+                CASE WHEN type = 'image' THEN content ELSE substr(content, 1, 1200) END AS content,
+                preview, source_app, timestamp, image_path, language, color_value
          FROM clipboard_items
          WHERE content LIKE ?1 OR preview LIKE ?2 OR source_app LIKE ?3
          ORDER BY timestamp DESC LIMIT ?4",
@@ -593,22 +760,26 @@ pub fn clipboard_write_to_clipboard(
     if item_type == "image" {
         if let Some(p) = image_path {
             if let Ok(data) = fs::read(&p) {
-                // Decode PNG back to RGBA for arboard
                 if let Ok(img) = image::load_from_memory(&data) {
                     let rgba = img.to_rgba8();
                     let (w, h) = rgba.dimensions();
                     let raw_bytes = rgba.into_raw();
-                    // Hash RGBA bytes — matches polling logic, prevents re-recording
-                    let rgba_hash = image_hash(&raw_bytes);
+
+                    // Set a 6-second cooldown BEFORE writing to clipboard.
+                    // The polling thread checks this and skips image recording during
+                    // the cooldown window.  Hash-based dedup is not reliable on macOS
+                    // because arboard applies alpha-premultiplication on read-back,
+                    // making the round-trip hash unpredictable.
+                    if let Ok(mut guard) = state.lock() {
+                        guard.image_write_cooldown_until = now_ms() + 6_000;
+                    }
+
                     let img_data = arboard::ImageData {
                         width: w as usize,
                         height: h as usize,
                         bytes: std::borrow::Cow::Owned(raw_bytes),
                     };
                     if cb.set_image(img_data).is_ok() {
-                        if let Ok(mut guard) = state.lock() {
-                            guard.last_image_hash = rgba_hash;
-                        }
                         return true;
                     }
                 }
@@ -665,11 +836,20 @@ pub fn clipboard_get_stats(
 
 #[tauri::command]
 pub fn clipboard_get_image_data(image_path: String) -> Result<String, String> {
-    let bytes = std::fs::read(&image_path)
-        .map_err(|e| format!("Failed to read image: {e}"))?;
+    // Images are already stored as PNG files — no decode/resize/re-encode needed.
+    // Just read raw bytes and base64-encode them for the WebView.
+    let bytes = std::fs::read(&image_path).map_err(|e| format!("Failed to read image: {e}"))?;
     use base64::Engine;
     let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
     Ok(format!("data:image/png;base64,{b64}"))
+}
+
+pub fn emit_clipboard_url_if_present(app: &AppHandle, state: &SharedClipboardState) {
+    if let Ok(mut clipboard) = Clipboard::new() {
+        if let Ok(text) = clipboard.get_text() {
+            maybe_emit_url_detected(app, state, &text);
+        }
+    }
 }
 
 pub fn init(app: &AppHandle) -> SharedClipboardState {

@@ -26,7 +26,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self' asset: https://asset.localhost; connect-src 'self' ws://localhost:1420 http://localhost:* https://localhost:*; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' asset: https://asset.localhost data: blob:",
+      "csp": "default-src 'self' asset: https://asset.localhost blob: data:; connect-src 'self' tauri: ipc: http: https: ws: wss: blob: data: 'unsafe-inline' http://localhost:*; script-src 'self' 'unsafe-inline' 'unsafe-eval' blob:; style-src 'self' 'unsafe-inline'; img-src * asset: https://asset.localhost data: blob: nav-icon: file:;",
       "assetProtocol": {
         "enable": true,
         "scope": [

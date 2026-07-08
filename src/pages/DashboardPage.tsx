@@ -3,6 +3,8 @@ import { DynamicGreeting } from '@/components/dashboard/DynamicGreeting'
 import { TimePulseHeatmap } from '@/components/dashboard/TimePulseHeatmap'
 import { QuickTools } from '@/components/dashboard/QuickTools'
 import { VRMViewer } from '@/components/dashboard/VRMViewer'
+// @ts-ignore
+import evaModel from '@/assets/EVA.vrm'
 import { useState, useEffect } from 'react'
 
 export function DashboardPage(): React.ReactElement {
@@ -32,7 +34,7 @@ export function DashboardPage(): React.ReactElement {
 
         {/* 3D Character - Full Screen, will naturally be covered by left cards */}
         {enableVirtualAvatar && (
-          <VRMViewer modelPath="./EVA.vrm" className="w-[120%] h-[120%] lg:w-[100%] translate-y-[5%] pointer-events-auto" />
+          <VRMViewer modelPath="/EVA.vrm" className="w-[120%] h-[120%] lg:w-[100%] translate-y-[5%] pointer-events-auto" />
         )}
       </div>
 

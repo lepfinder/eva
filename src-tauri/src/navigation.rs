@@ -105,48 +105,6 @@ fn persist(app: &AppHandle, data: &NavigationData) -> Result<(), String> {
     fs::write(nav_file(app), json).map_err(|e| e.to_string())
 }
 
-// ── Migration ─────────────────────────────────────────────────────────────────
-
-/// On first run copy navigation data from the old Electron app location.
-pub fn try_migrate(app: &AppHandle) {
-    if nav_file(app).exists() {
-        return;
-    }
-    let Some(home) = dirs::home_dir() else { return };
-    // Try new userData path first, then fall back to old direct path
-    let candidates = [
-        home.join("Library/Application Support/com.xiyangxie.eva/userData/navigation"),
-        home.join("Library/Application Support/eva/userData/navigation"),
-    ];
-    let src_dir = match candidates.iter().find(|p| p.join("navigation.json").exists()) {
-        Some(p) => p.clone(),
-        None => return,
-    };
-    let src_file = src_dir.join("navigation.json");
-
-    ensure_dirs(app);
-
-    if let Err(e) = fs::copy(&src_file, nav_file(app)) {
-        log::warn!("Migration: failed to copy navigation.json: {}", e);
-        return;
-    }
-    log::info!("Migration: copied navigation.json from Electron app");
-
-    let src_icons = src_dir.join("icons");
-    if src_icons.exists() {
-        let dst_icons = icons_dir(app);
-        if let Ok(entries) = fs::read_dir(&src_icons) {
-            for entry in entries.flatten() {
-                let dst = dst_icons.join(entry.file_name());
-                if !dst.exists() {
-                    let _ = fs::copy(entry.path(), &dst);
-                }
-            }
-        }
-        log::info!("Migration: copied icons from Electron app");
-    }
-}
-
 // ── Icon helpers ──────────────────────────────────────────────────────────────
 
 fn mime_for_ext(ext: &str) -> &'static str {

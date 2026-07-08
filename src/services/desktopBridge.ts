@@ -163,6 +163,18 @@ const clipboardApi: Record<string, AnyFn> = {
   },
 }
 
+const onClipboardUrlDetected = (callback: (url: string) => void) => {
+  let unlisten: (() => void) | null = null
+  listen('clipboard:url-detected', (event: any) => {
+    callback(event.payload)
+  }).then((fn: () => void) => {
+    unlisten = fn
+  })
+  return () => {
+    if (unlisten) unlisten()
+  }
+}
+
 // Vault
 const vaultApi: Record<string, AnyFn> = {
   vaultCanUseBiometric: () => invoke('vault_can_use_biometric'),
@@ -186,7 +198,6 @@ const vaultApi: Record<string, AnyFn> = {
   vaultLock: () => invoke('vault_lock'),
   vaultSave: (data: any) => invoke('vault_save', { data }),
   vaultSetContentProtection: (_enabled: boolean) => Promise.resolve(), // no-op in Eva
-  vaultImportFromSuperDashboard: () => invoke('vault_import_from_super_dashboard'),
 }
 
 // Activity Tracker
@@ -219,6 +230,7 @@ export function initDesktopBridge(): void {
       if (key === 'env') return envApi
       if (key === 'app') return appApi
       if (key === 'clipboard') return clipboardApi
+      if (key === 'onClipboardUrlDetected') return onClipboardUrlDetected
       if (key === 'activity') return activityApi
       return stub[key]
     },

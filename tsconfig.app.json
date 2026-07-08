@@ -13,11 +13,11 @@
     "noEmit": true,
     "jsx": "react-jsx",
     "baseUrl": ".",
-    "ignoreDeprecations": "6.0",
+    "ignoreDeprecations": "5.0",
     "paths": {
       "@/*": ["src/*"],
       "@renderer/*": ["src/*"]
     }
   },
-  "include": ["src", "src/**/*.ts", "src/**/*.tsx"]
+  "include": ["src/**/*.ts", "src/**/*.tsx", "src/**/*.d.ts"]
 }

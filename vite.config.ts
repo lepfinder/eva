@@ -14,5 +14,6 @@ export default defineConfig({
       '@renderer': resolve(__dirname, 'src')
     }
   },
-  plugins: [react()]
+  plugins: [react()],
+  assetsInclude: ['**/*.vrm']
 })

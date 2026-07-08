@@ -2,10 +2,12 @@
  * 剪贴板历史工具组件
  */
 import { useState, useEffect, useCallback, useRef } from 'react'
+import { flushSync } from 'react-dom'
 import { invoke } from '@tauri-apps/api/core'
+import { listen } from '@tauri-apps/api/event'
 import {
     Copy, Check, Trash2, Search, Clock, Image, Code, Type,
-    Palette, FileText, RefreshCw, MoreVertical, X
+    Palette, FileText, RefreshCw, MoreVertical, X, Loader2
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -27,6 +29,8 @@ import {
     AlertDialogTitle,
     AlertDialogTrigger,
 } from '@/components/ui/alert-dialog'
+
+const imageDataUrlCache = new Map<string, string>()
 
 // 类型定义
 type ClipboardItemType = 'text' | 'image' | 'html' | 'color' | 'code'
@@ -80,17 +84,53 @@ function formatTime(timestamp: number): string {
 // 通过 Rust 命令读取本地图片并转 base64 显示，绕开 WebView file:// 限制
 function ClipboardImage({ imagePath }: { imagePath: string }) {
     const [src, setSrc] = useState<string>('')
+    const placeholderRef = useRef<HTMLDivElement | null>(null)
+
     useEffect(() => {
-        invoke<string>('clipboard_get_image_data', { imagePath })
-            .then(setSrc)
-            .catch(() => setSrc(''))
+        if (imageDataUrlCache.has(imagePath)) {
+            setSrc(imageDataUrlCache.get(imagePath) || '')
+            return
+        }
+
+        const element = placeholderRef.current
+        if (!element) return
+
+        let cancelled = false
+        const observer = new IntersectionObserver(
+            (entries) => {
+                if (!entries[0].isIntersecting) return
+                observer.disconnect()
+                invoke<string>('clipboard_get_image_data', { imagePath })
+                    .then((dataUrl) => {
+                        if (cancelled) return
+                        imageDataUrlCache.set(imagePath, dataUrl)
+                        setSrc(dataUrl)
+                    })
+                    .catch(() => {
+                        if (!cancelled) setSrc('')
+                    })
+            },
+            { rootMargin: '200px' }
+        )
+
+        observer.observe(element)
+
+        return () => {
+            cancelled = true
+            observer.disconnect()
+        }
     }, [imagePath])
-    if (!src) return <div className="w-full h-24 rounded-lg bg-zinc-100 dark:bg-zinc-800 animate-pulse" />
+
+    if (!src) {
+        return <div ref={placeholderRef} className="w-full h-24 rounded-lg bg-zinc-100 dark:bg-zinc-800 animate-pulse" />
+    }
+
     return (
         <img
             src={src}
             alt="Clipboard image"
             className="w-full h-auto max-h-48 object-contain rounded-lg bg-zinc-100 dark:bg-zinc-800"
+            loading="lazy"
         />
     )
 }
@@ -144,12 +184,14 @@ function ClipboardCard({
     item,
     onCopy,
     onDelete,
-    copied
+    copied,
+    copying
 }: {
     item: ClipboardItem
     onCopy: (id: string) => void
     onDelete: (id: string) => void
     copied: boolean
+    copying: boolean
 }) {
     return (
         <div
@@ -217,8 +259,14 @@ function ClipboardCard({
                 </div>
             </div>
 
-            {/* 复制成功提示 */}
-            {copied && (
+            {/* 复制中 / 复制成功提示 */}
+            {copying && (
+                <div className="absolute inset-0 flex items-center justify-center bg-zinc-800/80 rounded-xl text-white font-medium">
+                    <Loader2 className="h-5 w-5 mr-2 animate-spin" />
+                    复制中…
+                </div>
+            )}
+            {!copying && copied && (
                 <div className="absolute inset-0 flex items-center justify-center bg-green-500/90 rounded-xl text-white font-medium">
                     <Check className="h-5 w-5 mr-2" />
                     已复制
@@ -233,10 +281,11 @@ export function ClipboardHistoryPage() {
     const [loading, setLoading] = useState(true)
     const [searchQuery, setSearchQuery] = useState('')
     const [copiedId, setCopiedId] = useState<string | null>(null)
+    const [copyingId, setCopyingId] = useState<string | null>(null)
     const [stats, setStats] = useState<{ total: number; byType: Record<string, number> } | null>(null)
     const [hasMore, setHasMore] = useState(true)
     const loadMoreRef = useRef<HTMLDivElement>(null)
-    const itemsPerPage = 50
+    const itemsPerPage = 30
 
     // 加载数据
     const loadItems = useCallback(async (reset = false) => {
@@ -283,14 +332,25 @@ export function ClipboardHistoryPage() {
 
     // 监听新条目事件，自动刷新
     useEffect(() => {
-        const cleanup = window.api.clipboard.onNewItem((newItem) => {
-            console.log('[ClipboardHistory] New item received:', newItem.type)
-            // 将新条目添加到列表顶部
-            setItems(prev => [newItem, ...prev])
-            // 更新统计
+        let cancelled = false
+        let unlisten: (() => void) | null = null
+
+        listen<ClipboardItem>('clipboard:newItem', (event) => {
+            if (cancelled) return
+            setItems(prev => [event.payload, ...prev])
             loadStats()
+        }).then(fn => {
+            if (cancelled) {
+                fn() // 组件已卸载，立即解绑
+            } else {
+                unlisten = fn
+            }
         })
-        return cleanup
+
+        return () => {
+            cancelled = true
+            if (unlisten) unlisten()
+        }
     }, [loadStats])
 
     // 搜索防抖
@@ -321,11 +381,19 @@ export function ClipboardHistoryPage() {
 
     // 复制操作
     const handleCopy = async (id: string) => {
+        // flushSync ensures the "copying" spinner renders immediately before the await
+        flushSync(() => {
+            setCopyingId(id)
+            setCopiedId(null)
+        })
+
         try {
             await window.api.clipboard.writeToClipboard(id)
+            setCopyingId(null)
             setCopiedId(id)
-            setTimeout(() => setCopiedId(null), 1500)
+            setTimeout(() => setCopiedId(prev => prev === id ? null : prev), 1500)
         } catch (error) {
+            setCopyingId(null)
             console.error('Failed to copy:', error)
         }
     }
@@ -460,6 +528,7 @@ export function ClipboardHistoryPage() {
                                         onCopy={handleCopy}
                                         onDelete={handleDelete}
                                         copied={copiedId === item.id}
+                                        copying={copyingId === item.id}
                                     />
                                 </div>
                             ))}

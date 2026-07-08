@@ -21,6 +21,12 @@ pub fn run() {
                     let _ = window.hide();
                 }
             }
+
+            if let WindowEvent::Focused(true) = event {
+                let app = window.app_handle();
+                let state = app.state::<clipboard::SharedClipboardState>();
+                clipboard::emit_clipboard_url_if_present(&app, state.inner());
+            }
         })
         .setup(|app| {
             if cfg!(debug_assertions) {
@@ -30,9 +36,6 @@ pub fn run() {
                         .build(),
                 )?;
             }
-            navigation::try_migrate(app.handle());
-            settings::try_migrate_user_data(app.handle());
-
             // Initialise clipboard service
             let clipboard_state = clipboard::init(app.handle());
             app.manage(clipboard_state);
@@ -121,7 +124,6 @@ pub fn run() {
             vault::vault_lock,
             vault::vault_save,
             vault::vault_set_content_protection,
-            vault::vault_import_from_super_dashboard,
             vault::vault_unlock_with_biometric,
             vault::vault_prompt_biometric,
             // VisualRecall

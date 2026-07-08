@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef, useMemo, useDeferredValue } from 'react'
 import {
     Search,
     ChevronDown,
@@ -91,6 +91,11 @@ interface NavigationData {
     navigationItems: NavCategory[]
 }
 
+interface FilteredCategory extends NavCategory {
+    filteredDirectItems: NavLinkItem[]
+    filteredSubCategories: NavSubCategory[]
+}
+
 // 编辑上下文
 interface EditContext {
     item: NavLinkItem
@@ -135,10 +140,12 @@ export function NavigationPage({
     const [data, setData] = useState<NavigationData>({ navigationItems: [] })
     const [loading, setLoading] = useState(true)
     const [searchQuery, setSearchQuery] = useState('')
+    const deferredSearchQuery = useDeferredValue(searchQuery)
     const [expandedCategories, setExpandedCategories] = useState<Set<string>>(new Set())
     const [activeSection, setActiveSection] = useState<string | null>(null)
     const contentRef = useRef<HTMLDivElement>(null)
     const sectionRefs = useRef<Map<string, HTMLDivElement>>(new Map())
+    const scrollRafPendingRef = useRef(false)
 
     // 当前视图
     const [currentView, setCurrentView] = useState<ViewType>('navigation')
@@ -243,24 +250,32 @@ export function NavigationPage({
 
     // 监听滚动，更新当前激活的分类
     const handleScroll = useCallback(() => {
-        if (!contentRef.current) return
+        if (!contentRef.current || scrollRafPendingRef.current) return
 
-        let currentSection: string | null = null
-
-        sectionRefs.current.forEach((element, id) => {
-            const rect = element.getBoundingClientRect()
-            const containerRect = contentRef.current!.getBoundingClientRect()
-            const relativeTop = rect.top - containerRect.top
-
-            if (relativeTop <= 100) {
-                currentSection = id
+        scrollRafPendingRef.current = true
+        window.requestAnimationFrame(() => {
+            const container = contentRef.current
+            if (!container) {
+                scrollRafPendingRef.current = false
+                return
             }
-        })
 
-        if (currentSection && currentSection !== activeSection) {
-            setActiveSection(currentSection)
-        }
-    }, [activeSection])
+            const containerRect = container.getBoundingClientRect()
+            let currentSection: string | null = null
+
+            sectionRefs.current.forEach((element, id) => {
+                const rect = element.getBoundingClientRect()
+                const relativeTop = rect.top - containerRect.top
+
+                if (relativeTop <= 100) {
+                    currentSection = id
+                }
+            })
+
+            setActiveSection((prev) => (prev === currentSection ? prev : currentSection))
+            scrollRafPendingRef.current = false
+        })
+    }, [])
 
     // 打开编辑对话框
     const handleEdit = (item: NavLinkItem, categoryId: string, subCategoryId: string | null) => {
@@ -340,28 +355,48 @@ export function NavigationPage({
         }
     }
 
-    // 过滤搜索结果
-    const filterItems = (items: NavLinkItem[]): NavLinkItem[] => {
-        if (!searchQuery.trim()) return items.filter((i) => i.enabled !== false)
-        const query = searchQuery.toLowerCase()
-        return items.filter(
-            (item) =>
-                item.enabled !== false &&
-                (item.title.toLowerCase().includes(query) ||
-                    item.description?.toLowerCase().includes(query) ||
-                    item.href.toLowerCase().includes(query))
-        )
-    }
+    // 缓存过滤后的分类结果，避免滚动或输入时重复全量计算
+    const visibleCategories = useMemo<FilteredCategory[]>(() => {
+        const query = deferredSearchQuery.trim().toLowerCase()
 
-    // 检查分类是否有匹配的项目
-    const categoryHasMatches = (category: NavCategory): boolean => {
-        if (!searchQuery.trim()) return true
-        const directMatches = filterItems(category.items).length > 0
-        const subMatches = category.subCategories?.some(
-            (sub) => filterItems(sub.items).length > 0
-        )
-        return directMatches || subMatches
-    }
+        const filterItems = (items: NavLinkItem[]): NavLinkItem[] => {
+            if (!query) return items.filter((i) => i.enabled !== false)
+            return items.filter(
+                (item) =>
+                    item.enabled !== false &&
+                    (item.title.toLowerCase().includes(query) ||
+                        item.description?.toLowerCase().includes(query) ||
+                        item.href.toLowerCase().includes(query))
+            )
+        }
+
+        return data.navigationItems
+            .filter((category) => category.enabled !== false)
+            .map((category) => {
+                const filteredDirectItems = filterItems(category.items)
+                const filteredSubCategories = (category.subCategories || [])
+                    .filter((sub) => sub.enabled !== false)
+                    .map((sub) => ({
+                        ...sub,
+                        items: filterItems(sub.items)
+                    }))
+                    .filter((sub) => sub.items.length > 0 || !query)
+
+                const hasMatches = !query || filteredDirectItems.length > 0 ||
+                    filteredSubCategories.some((sub) => sub.items.length > 0)
+
+                if (!hasMatches) {
+                    return null
+                }
+
+                return {
+                    ...category,
+                    filteredDirectItems,
+                    filteredSubCategories
+                }
+            })
+            .filter((category): category is FilteredCategory => category !== null)
+    }, [data.navigationItems, deferredSearchQuery])
 
     // 获取浏览器图标
     const getBrowserIcon = (browser?: string): React.ReactNode => {
@@ -625,11 +660,9 @@ export function NavigationPage({
 
                 <ScrollArea className="flex-1">
                     <nav className="space-y-1 pr-2">
-                        {data.navigationItems
-                            .filter((c) => c.enabled !== false && categoryHasMatches(c))
-                            .map((category) => {
+                        {visibleCategories.map((category) => {
                                 const hasSubCategories =
-                                    category.subCategories && category.subCategories.length > 0
+                                    category.filteredSubCategories && category.filteredSubCategories.length > 0
                                 const isActive = activeSection === category.id
                                 const isExpanded = expandedCategories.has(category.id)
 
@@ -663,9 +696,7 @@ export function NavigationPage({
                                         {/* 子分类快捷链接 */}
                                         {hasSubCategories && isExpanded && (
                                             <div className="ml-6 mt-1 space-y-0.5">
-                                                {category.subCategories
-                                                    .filter((s) => s.enabled !== false)
-                                                    .filter((s) => !searchQuery || filterItems(s.items).length > 0)
+                                                {category.filteredSubCategories
                                                     .map((sub) => (
                                                         <Button
                                                             key={sub.id}
@@ -710,19 +741,21 @@ export function NavigationPage({
                     onScroll={handleScroll}
                 >
                     <div className="space-y-8 pb-8">
-                        {data.navigationItems
-                            .filter((c) => c.enabled !== false && categoryHasMatches(c))
-                            .map((category) => {
+                        {visibleCategories.map((category) => {
                                 const hasSubCategories =
-                                    category.subCategories && category.subCategories.length > 0
-                                const hasDirectItems = category.items && category.items.length > 0
-                                const filteredDirectItems = filterItems(category.items)
+                                    category.filteredSubCategories && category.filteredSubCategories.length > 0
+                                const hasDirectItems = category.filteredDirectItems.length > 0
+                                const filteredDirectItems = category.filteredDirectItems
 
                                 return (
                                     <div
                                         key={category.id}
                                         ref={(el) => {
-                                            if (el) sectionRefs.current.set(category.id, el)
+                                            if (el) {
+                                                sectionRefs.current.set(category.id, el)
+                                            } else {
+                                                sectionRefs.current.delete(category.id)
+                                            }
                                         }}
                                         className="scroll-mt-4"
                                     >
@@ -755,17 +788,20 @@ export function NavigationPage({
 
                                         {/* 子分类 */}
                                         {hasSubCategories &&
-                                            category.subCategories
-                                                .filter((s) => s.enabled !== false)
+                                            category.filteredSubCategories
                                                 .map((subCategory) => {
-                                                    const filteredItems = filterItems(subCategory.items)
+                                                    const filteredItems = subCategory.items
                                                     if (filteredItems.length === 0) return null
 
                                                     return (
                                                         <div
                                                             key={subCategory.id}
                                                             ref={(el) => {
-                                                                if (el) sectionRefs.current.set(subCategory.id, el)
+                                                                if (el) {
+                                                                    sectionRefs.current.set(subCategory.id, el)
+                                                                } else {
+                                                                    sectionRefs.current.delete(subCategory.id)
+                                                                }
                                                             }}
                                                             className="mb-6 scroll-mt-4"
                                                         >

@@ -66,58 +66,6 @@ fn dir_size(path: &PathBuf) -> u64 {
     total
 }
 
-// ── Migration from Electron super-dashboard ───────────────────────────────────
-
-/// Copy user data from the old Electron app (super-dashboard / eva) to this Tauri app.
-/// Skips: visual_recall, clipboard-images, clipboard-history.db (large / privacy-sensitive).
-/// Navigation is handled separately in navigation.rs.
-pub fn try_migrate_user_data(app: &AppHandle) {
-    let dst_base = user_data(app);
-    let Some(home) = dirs::home_dir() else { return };
-    let src_base = home.join("Library/Application Support/eva/userData");
-
-    if !src_base.exists() {
-        return;
-    }
-
-    // (src relative to src_base, dst relative to dst_base)
-    let items: &[(&str, &str)] = &[
-        ("vault.enc", "vault.enc"),
-        ("activity-tracker.db", "activity-tracker.db"),
-        ("knowledge_base", "knowledge_base"),
-    ];
-
-    for (src_rel, dst_rel) in items {
-        let src = src_base.join(src_rel);
-        let dst = dst_base.join(dst_rel);
-        if src.exists() && !dst.exists() {
-            if let Err(e) = copy_item(&src, &dst) {
-                log::warn!("Migration: failed to copy {} → {}: {}", src_rel, dst_rel, e);
-            } else {
-                log::info!("Migration: copied {}", src_rel);
-            }
-        }
-    }
-}
-
-fn copy_item(src: &PathBuf, dst: &PathBuf) -> Result<(), std::io::Error> {
-    let meta = fs::metadata(src)?;
-    if meta.is_file() {
-        if let Some(parent) = dst.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        fs::copy(src, dst)?;
-    } else if meta.is_dir() {
-        fs::create_dir_all(dst)?;
-        for entry in fs::read_dir(src)? {
-            let entry = entry?;
-            let dst_child = dst.join(entry.file_name());
-            copy_item(&entry.path(), &dst_child)?;
-        }
-    }
-    Ok(())
-}
-
 // ── Tauri commands ────────────────────────────────────────────────────────────
 
 #[tauri::command]

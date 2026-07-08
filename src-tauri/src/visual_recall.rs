@@ -294,7 +294,7 @@ fn capture_screen_bytes() -> Result<Vec<u8>, String> {
     let temp_str = temp_path.to_string_lossy().to_string();
 
     let status = Command::new("screencapture")
-        .args(["-x", "-t", "png", "-m", &temp_str])
+        .args(["-x", "-t", "png", "-D", "1", &temp_str])
         .status()
         .map_err(|e| format!("screencapture exec failed: {}", e))?;
 
