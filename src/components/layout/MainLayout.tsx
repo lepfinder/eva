@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect } from 'react'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { Sidebar, NavItem } from './Sidebar'
 import { DashboardPage } from '@/pages/DashboardPage'
@@ -10,18 +10,6 @@ import { ClipboardHistoryPage } from '@/pages/ClipboardHistoryPage'
 import { TimeAuditorPage } from '@/pages/TimeAuditorPage'
 import { VisualRecallPage } from '@/pages/VisualRecallPage'
 import { AutomationPage } from '@/pages/AutomationPage'
-
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle
-} from '@/components/ui/alert-dialog'
-import { Link, ExternalLink } from 'lucide-react'
 
 // 导航项到中文名称的映射
 const NAV_TITLE_MAP: Record<NavItem, string> = {
@@ -38,10 +26,6 @@ const NAV_TITLE_MAP: Record<NavItem, string> = {
 
 export function MainLayoutContents(): React.ReactElement {
   const [activeNav, setActiveNav] = useState<NavItem>('dashboard')
-  const [clipboardUrl, setClipboardUrl] = useState<string | null>(null)
-  const [showUrlDialog, setShowUrlDialog] = useState(false)
-  // 用于传递给 NavigationPage 的待添加 URL
-  const [pendingAddUrl, setPendingAddUrl] = useState<string | null>(null)
   // 子工具标题后缀（用于 Toolbox 等页面）
   const [subTitle, setSubTitle] = useState<string | null>(null)
 
@@ -60,18 +44,6 @@ export function MainLayoutContents(): React.ReactElement {
   useEffect(() => {
     setSubTitle(null)
   }, [activeNav])
-
-
-  // 监听剪贴板 URL 检测
-  useEffect(() => {
-    const cleanup = window.api.onClipboardUrlDetected((url) => {
-      console.log('[MainLayout] Clipboard URL detected:', url)
-      setClipboardUrl(url)
-      setShowUrlDialog(true)
-    })
-
-    return cleanup
-  }, [])
 
   // 监听快捷键导航事件
   useEffect(() => {
@@ -120,49 +92,13 @@ export function MainLayoutContents(): React.ReactElement {
     return () => window.removeEventListener('navigate-to-tool', handleNavigateToTool)
   }, [])
 
-  // 处理添加站点
-  const handleAddSite = useCallback(() => {
-    if (clipboardUrl) {
-      // 设置待添加 URL，切换到导航页面
-      setPendingAddUrl(clipboardUrl)
-      setActiveNav('navigation')
-    }
-    setShowUrlDialog(false)
-    setClipboardUrl(null)
-  }, [clipboardUrl])
-
-  // 清除待添加 URL（NavigationPage 处理完后调用）
-  const clearPendingAddUrl = useCallback(() => {
-    setPendingAddUrl(null)
-  }, [])
-
-  // 取消
-  const handleCancel = useCallback(() => {
-    setShowUrlDialog(false)
-    setClipboardUrl(null)
-  }, [])
-
-  // 提取域名用于显示
-  const getDomain = (url: string): string => {
-    try {
-      return new URL(url).hostname
-    } catch {
-      return url
-    }
-  }
-
   const renderPage = (): React.ReactElement => {
     switch (activeNav) {
       case 'dashboard':
         return <DashboardPage />
 
       case 'navigation':
-        return (
-          <NavigationPage
-            pendingAddUrl={pendingAddUrl}
-            onPendingAddUrlHandled={clearPendingAddUrl}
-          />
-        )
+        return <NavigationPage />
       case 'toolbox':
         return <ToolboxPage onSubTitleChange={setSubTitle} />
       case 'automation':
@@ -207,36 +143,6 @@ export function MainLayoutContents(): React.ReactElement {
           </main>
         )}
       </div>
-
-      {/* 剪贴板 URL 检测弹窗 */}
-      <AlertDialog open={showUrlDialog} onOpenChange={setShowUrlDialog}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle className="flex items-center gap-2">
-              <Link className="h-5 w-5 text-primary" />
-              检测到链接
-            </AlertDialogTitle>
-            <AlertDialogDescription className="space-y-3">
-              <p>剪贴板中检测到网站链接，是否要添加到站点导航？</p>
-              <div className="flex items-center gap-2 rounded-lg bg-muted p-3">
-                <ExternalLink className="h-4 w-4 shrink-0 text-muted-foreground" />
-                <div className="min-w-0 flex-1">
-                  <p className="truncate font-medium text-foreground">
-                    {clipboardUrl ? getDomain(clipboardUrl) : ''}
-                  </p>
-                  <p className="truncate text-xs text-muted-foreground">
-                    {clipboardUrl}
-                  </p>
-                </div>
-              </div>
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel onClick={handleCancel}>不了，谢谢</AlertDialogCancel>
-            <AlertDialogAction onClick={handleAddSite}>添加站点</AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
     </div>
   )
 }

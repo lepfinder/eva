@@ -240,29 +240,8 @@ fn is_http_url(text: &str) -> bool {
         .unwrap_or(false)
 }
 
-fn maybe_emit_url_detected(app: &AppHandle, state: &SharedClipboardState, text: &str) {
-    let trimmed = text.trim();
-    if !is_http_url(trimmed) {
-        return;
-    }
-
-    let should_emit = {
-        let mut guard = match state.lock() {
-            Ok(g) => g,
-            Err(_) => return,
-        };
-
-        if guard.last_url_detected == trimmed {
-            false
-        } else {
-            guard.last_url_detected = trimmed.to_string();
-            true
-        }
-    };
-
-    if should_emit {
-        let _ = app.emit("clipboard:url-detected", trimmed.to_string());
-    }
+fn maybe_emit_url_detected(_app: &AppHandle, _state: &SharedClipboardState, _text: &str) {
+    // 已根据用户需求停用剪贴板 URL 自动检测与广播
 }
 
 #[cfg(target_os = "macos")]

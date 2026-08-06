@@ -1306,6 +1306,34 @@ export function VaultPage(): React.ReactElement {
                         <Lock className="w-4 h-4 mr-2" />
                         新建密码
                     </Button>
+                    {activeTab === 'mfa' && vaultData.items.some(item => item.type === 'mfa' && item.mfaSecret) && (
+                        <Button
+                            variant="outline"
+                            onClick={() => {
+                                const mfaItems = vaultData.items.filter(item => item.type === 'mfa' && item.mfaSecret);
+                                const lines = mfaItems.map(item => {
+                                    const label = encodeURIComponent(item.title);
+                                    const secret = item.mfaSecret ? item.mfaSecret.replace(/[\s-]/g, '').toUpperCase() : '';
+                                    const issuer = item.mfaIssuer ? `&issuer=${encodeURIComponent(item.mfaIssuer)}` : '';
+                                    return `otpauth://totp/${label}?secret=${secret}${issuer}`;
+                                });
+                                const content = lines.join('\n');
+                                const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+                                const url = URL.createObjectURL(blob);
+                                const link = document.createElement('a');
+                                link.href = url;
+                                link.download = 'mfa_export.txt';
+                                document.body.appendChild(link);
+                                link.click();
+                                document.body.removeChild(link);
+                                URL.revokeObjectURL(url);
+                                alert(`成功导出 ${mfaItems.length} 个 MFA 账号密钥到 mfa_export.txt`);
+                            }}
+                        >
+                            <Download className="w-4 h-4 mr-2" />
+                            导出 MFA
+                        </Button>
+                    )}
                     <Button variant="ghost" onClick={handleLock}>
                         <Lock className="w-4 h-4" />
                     </Button>
