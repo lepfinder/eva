@@ -246,29 +246,97 @@ fn maybe_emit_url_detected(_app: &AppHandle, _state: &SharedClipboardState, _tex
 
 #[cfg(target_os = "macos")]
 fn get_source_app() -> String {
-    let script = r#"tell application \"System Events\"
-    set frontApp to name of first application process whose frontmost is true
-end tell
-return frontApp"#;
+    // 使用 lsappinfo（直接查询 WindowServer）获取前台应用的精确身份，
+    // 按 ASN 独立标识，即使多个进程共享 com.github.Electron bundle ID 也不会混淆。
+    let front_asn = match Command::new("lsappinfo").arg("front").output().ok() {
+        Some(o) => String::from_utf8_lossy(&o.stdout).trim().to_string(),
+        None => return "Unknown".to_string(),
+    };
+    if front_asn.is_empty() {
+        return "Unknown".to_string();
+    }
 
-    Command::new("osascript")
-        .arg("-e")
-        .arg(script)
+    let info_out = match Command::new("lsappinfo")
+        .args(["info", "-only", "name", "-only", "bundleid", "-only", "bundlepath", &front_asn])
         .output()
         .ok()
-        .and_then(|out| {
-            if out.status.success() {
-                let app = String::from_utf8_lossy(&out.stdout).trim().to_string();
-                if app.is_empty() {
-                    None
-                } else {
-                    Some(app)
-                }
+    {
+        Some(o) => String::from_utf8_lossy(&o.stdout).to_string(),
+        None => return "Unknown".to_string(),
+    };
+
+    let mut display_name = String::new();
+    let mut bundle_id = String::new();
+    let mut bundle_path = String::new();
+
+    for line in info_out.lines() {
+        let line = line.trim();
+        if let Some(val) = line.strip_prefix("\"LSDisplayName\"=") {
+            display_name = val.trim_matches('"').to_string();
+        } else if let Some(val) = line.strip_prefix("\"CFBundleIdentifier\"=") {
+            bundle_id = val.trim_matches('"').to_string();
+        } else if let Some(val) = line.strip_prefix("\"LSBundlePath\"=") {
+            bundle_path = val.trim_matches('"').to_string();
+        }
+    }
+
+    // 对于通用 Electron 进程，从 bundle path 推断实际应用名
+    if bundle_id == "com.github.Electron" && !bundle_path.is_empty() {
+        if let Some(project) = extract_clip_project_name(&bundle_path) {
+            return project;
+        }
+    }
+
+    let is_generic = |n: &str| {
+        let l = n.to_lowercase();
+        l.is_empty() || l == "missing value" || l == "electron" || l == "electron helper"
+    };
+
+    if !is_generic(&display_name) {
+        display_name
+    } else if !is_generic(&bundle_id) {
+        if bundle_id.to_lowercase().contains("antigravity") {
+            "Antigravity".to_string()
+        } else if bundle_id.to_lowercase().contains("workbuddy") {
+            "WorkBuddy".to_string()
+        } else if let Some(last) = bundle_id.split('.').last() {
+            if !is_generic(last) {
+                last.to_string()
             } else {
-                None
+                "Unknown".to_string()
             }
-        })
-        .unwrap_or_else(|| "Unknown".to_string())
+        } else {
+            "Unknown".to_string()
+        }
+    } else {
+        "Unknown".to_string()
+    }
+}
+
+/// 从 bundle path 推断项目名
+fn extract_clip_project_name(bundle_path: &str) -> Option<String> {
+    if bundle_path.starts_with("/Applications/") {
+        let app_name = bundle_path
+            .strip_prefix("/Applications/")?
+            .strip_suffix(".app")
+            .or_else(|| bundle_path.strip_prefix("/Applications/"))?;
+        return Some(app_name.to_string());
+    }
+    if let Some(idx) = bundle_path.find("/node_modules/") {
+        let prefix = &bundle_path[..idx];
+        let project = prefix.rsplit('/').next()?;
+        if !project.is_empty() {
+            return Some(project.to_string());
+        }
+    }
+    if let Some(idx) = bundle_path.rfind(".app") {
+        let before_app = &bundle_path[..idx];
+        let name = before_app.rsplit('/').next()?;
+        if !name.is_empty() && name != "Electron" {
+            return Some(name.to_string());
+        }
+    }
+    None
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -371,7 +439,7 @@ fn db_insert(conn: &Connection, item: &ClipboardItem) -> Result<(), rusqlite::Er
 }
 
 fn db_cleanup(conn: &Connection, image_dir: &PathBuf) {
-    const MAX_ITEMS: i64 = 3000;
+    const MAX_ITEMS: i64 = 10000;
     let count: i64 = conn
         .query_row("SELECT COUNT(*) FROM clipboard_items", [], |r| r.get(0))
         .unwrap_or(0);
@@ -574,11 +642,135 @@ pub fn start_polling(app: AppHandle, state: SharedClipboardState) {
 // Tauri commands
 // ──────────────────────────────────────────────────
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClipboardDailyStat {
+    pub date: String,
+    pub count: u64,
+}
+
+#[tauri::command]
+pub fn clipboard_get_daily_stats(
+    state: tauri::State<SharedClipboardState>,
+) -> Vec<ClipboardDailyStat> {
+    let guard = match state.lock() {
+        Ok(g) => g,
+        Err(_) => return vec![],
+    };
+    let conn = match guard.db() {
+        Some(c) => c,
+        None => return vec![],
+    };
+
+    let mut stmt = match conn.prepare(
+        "SELECT date(datetime(timestamp / 1000, 'unixepoch', 'localtime')) AS day, COUNT(*)
+         FROM clipboard_items
+         WHERE day IS NOT NULL
+         GROUP BY day
+         ORDER BY day DESC",
+    ) {
+        Ok(s) => s,
+        Err(_) => return vec![],
+    };
+
+    stmt.query_map([], |r| {
+        Ok(ClipboardDailyStat {
+            date: r.get(0)?,
+            count: r.get::<_, i64>(1)? as u64,
+        })
+    })
+    .unwrap_or_else(|_| panic!("query daily stats failed"))
+    .flatten()
+    .collect()
+}
+
+pub fn db_get_items(conn: &Connection, limit: i64, offset: i64, date_filter: Option<&str>) -> Vec<ClipboardItem> {
+    if let Some(date) = date_filter.filter(|d| !d.trim().is_empty()) {
+        let mut stmt = match conn.prepare(
+            "SELECT id, type,
+                    CASE WHEN type = 'image' THEN content ELSE substr(content, 1, 1200) END AS content,
+                    preview, source_app, timestamp, image_path, language, color_value
+             FROM clipboard_items
+             WHERE date(datetime(timestamp / 1000, 'unixepoch', 'localtime')) = ?1
+             ORDER BY timestamp DESC LIMIT ?2 OFFSET ?3",
+        ) {
+            Ok(s) => s,
+            Err(_) => return vec![],
+        };
+
+        stmt.query_map(params![date, limit, offset], row_to_item)
+            .map(|rows| rows.flatten().collect())
+            .unwrap_or_default()
+    } else {
+        let mut stmt = match conn.prepare(
+            "SELECT id, type,
+                    CASE WHEN type = 'image' THEN content ELSE substr(content, 1, 1200) END AS content,
+                    preview, source_app, timestamp, image_path, language, color_value
+             FROM clipboard_items ORDER BY timestamp DESC LIMIT ?1 OFFSET ?2",
+        ) {
+            Ok(s) => s,
+            Err(_) => return vec![],
+        };
+
+        stmt.query_map(params![limit, offset], row_to_item)
+            .map(|rows| rows.flatten().collect())
+            .unwrap_or_default()
+    }
+}
+
+pub fn db_search_items(conn: &Connection, query: &str, limit: i64, date_filter: Option<&str>) -> Vec<ClipboardItem> {
+    if query.trim().is_empty() {
+        return vec![];
+    }
+    let pattern = format!("%{}%", query.trim());
+
+    if let Some(date) = date_filter.filter(|d| !d.trim().is_empty()) {
+        let mut stmt = match conn.prepare(
+            "SELECT id, type,
+                    CASE WHEN type = 'image' THEN content ELSE substr(content, 1, 1200) END AS content,
+                    preview, source_app, timestamp, image_path, language, color_value
+             FROM clipboard_items
+             WHERE (content LIKE ?1 OR preview LIKE ?2 OR source_app LIKE ?3)
+               AND date(datetime(timestamp / 1000, 'unixepoch', 'localtime')) = ?4
+             ORDER BY timestamp DESC LIMIT ?5",
+        ) {
+            Ok(s) => s,
+            Err(_) => return vec![],
+        };
+
+        stmt.query_map(params![pattern, pattern, pattern, date, limit], row_to_item)
+            .map(|rows| rows.flatten().collect())
+            .unwrap_or_default()
+    } else {
+        let mut stmt = match conn.prepare(
+            "SELECT id, type,
+                    CASE WHEN type = 'image' THEN content ELSE substr(content, 1, 1200) END AS content,
+                    preview, source_app, timestamp, image_path, language, color_value
+             FROM clipboard_items
+             WHERE (content LIKE ?1 OR preview LIKE ?2 OR source_app LIKE ?3)
+             ORDER BY timestamp DESC LIMIT ?4",
+        ) {
+            Ok(s) => s,
+            Err(_) => return vec![],
+        };
+
+        stmt.query_map(params![pattern, pattern, pattern, limit], row_to_item)
+            .map(|rows| rows.flatten().collect())
+            .unwrap_or_default()
+    }
+}
+
+pub fn set_clipboard_text(text: &str) -> Result<(), String> {
+    let mut cb = Clipboard::new().map_err(|e| format!("Failed to open clipboard: {}", e))?;
+    cb.set_text(text).map_err(|e| format!("Failed to set clipboard text: {}", e))
+}
+
 #[tauri::command]
 pub fn clipboard_get_items(
     state: tauri::State<SharedClipboardState>,
     limit: Option<i64>,
     offset: Option<i64>,
+    date_filter: Option<String>,
 ) -> Vec<ClipboardItem> {
     let guard = match state.lock() {
         Ok(g) => g,
@@ -590,21 +782,7 @@ pub fn clipboard_get_items(
     };
     let limit = limit.unwrap_or(50);
     let offset = offset.unwrap_or(0);
-
-    let mut stmt = match conn.prepare(
-        "SELECT id, type,
-                CASE WHEN type = 'image' THEN content ELSE substr(content, 1, 1200) END AS content,
-                preview, source_app, timestamp, image_path, language, color_value
-         FROM clipboard_items ORDER BY timestamp DESC LIMIT ?1 OFFSET ?2",
-    ) {
-        Ok(s) => s,
-        Err(_) => return vec![],
-    };
-
-    stmt.query_map(params![limit, offset], row_to_item)
-        .unwrap_or_else(|_| panic!("query failed"))
-        .flatten()
-        .collect()
+    db_get_items(&conn, limit, offset, date_filter.as_deref())
 }
 
 #[tauri::command]
@@ -612,6 +790,7 @@ pub fn clipboard_search_items(
     state: tauri::State<SharedClipboardState>,
     query: String,
     limit: Option<i64>,
+    date_filter: Option<String>,
 ) -> Vec<ClipboardItem> {
     let guard = match state.lock() {
         Ok(g) => g,
@@ -630,22 +809,42 @@ pub fn clipboard_search_items(
     let limit = limit.unwrap_or(50);
     let pattern = format!("%{}%", query);
 
-    let mut stmt = match conn.prepare(
-        "SELECT id, type,
-                CASE WHEN type = 'image' THEN content ELSE substr(content, 1, 1200) END AS content,
-                preview, source_app, timestamp, image_path, language, color_value
-         FROM clipboard_items
-         WHERE content LIKE ?1 OR preview LIKE ?2 OR source_app LIKE ?3
-         ORDER BY timestamp DESC LIMIT ?4",
-    ) {
-        Ok(s) => s,
-        Err(_) => return vec![],
-    };
+    if let Some(date) = date_filter.filter(|d| !d.trim().is_empty()) {
+        let mut stmt = match conn.prepare(
+            "SELECT id, type,
+                    CASE WHEN type = 'image' THEN content ELSE substr(content, 1, 1200) END AS content,
+                    preview, source_app, timestamp, image_path, language, color_value
+             FROM clipboard_items
+             WHERE (content LIKE ?1 OR preview LIKE ?2 OR source_app LIKE ?3)
+               AND date(datetime(timestamp / 1000, 'unixepoch', 'localtime')) = ?4
+             ORDER BY timestamp DESC LIMIT ?5",
+        ) {
+            Ok(s) => s,
+            Err(_) => return vec![],
+        };
 
-    stmt.query_map(params![pattern, pattern, pattern, limit], row_to_item)
-        .unwrap_or_else(|_| panic!("query failed"))
-        .flatten()
-        .collect()
+        stmt.query_map(params![pattern, pattern, pattern, date, limit], row_to_item)
+            .unwrap_or_else(|_| panic!("query failed"))
+            .flatten()
+            .collect()
+    } else {
+        let mut stmt = match conn.prepare(
+            "SELECT id, type,
+                    CASE WHEN type = 'image' THEN content ELSE substr(content, 1, 1200) END AS content,
+                    preview, source_app, timestamp, image_path, language, color_value
+             FROM clipboard_items
+             WHERE content LIKE ?1 OR preview LIKE ?2 OR source_app LIKE ?3
+             ORDER BY timestamp DESC LIMIT ?4",
+        ) {
+            Ok(s) => s,
+            Err(_) => return vec![],
+        };
+
+        stmt.query_map(params![pattern, pattern, pattern, limit], row_to_item)
+            .unwrap_or_else(|_| panic!("query failed"))
+            .flatten()
+            .collect()
+    }
 }
 
 #[tauri::command]

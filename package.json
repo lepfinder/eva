@@ -10,7 +10,9 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
-    "tauri:build": "tauri build"
+    "tauri:build": "tauri build",
+    "eva": "cargo run --manifest-path src-tauri/Cargo.toml --bin eva-cli --",
+    "cli": "cargo run --manifest-path src-tauri/Cargo.toml --bin eva-cli --"
   },
   "dependencies": {
     "@ant-design/x": "^2.1.1",

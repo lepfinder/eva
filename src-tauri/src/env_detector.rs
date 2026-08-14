@@ -388,18 +388,18 @@ fn current_timestamp() -> String {
     )
 }
 
-// ==================== Commands ====================
+// ==================== Commands & Direct Helpers ====================
 
-#[tauri::command]
-pub fn env_detect(app: AppHandle) -> Vec<EnvTool> {
-    let descriptions = load_descriptions(&app);
+pub fn detect_all_tools(descriptions: Option<&HashMap<String, String>>) -> Vec<EnvTool> {
     let now = current_timestamp();
+    let empty_map = HashMap::new();
+    let desc_map = descriptions.unwrap_or(&empty_map);
 
     TOOLS
         .iter()
         .map(|spec| {
             let path = which(spec.binary);
-            let saved_desc = descriptions.get(spec.id).cloned();
+            let saved_desc = desc_map.get(spec.id).cloned();
             let description = saved_desc.or_else(|| Some(spec.description.to_string()));
 
             if let Some(ref bin_path) = path {
@@ -455,6 +455,12 @@ pub fn env_detect(app: AppHandle) -> Vec<EnvTool> {
             }
         })
         .collect()
+}
+
+#[tauri::command]
+pub fn env_detect(app: AppHandle) -> Vec<EnvTool> {
+    let descriptions = load_descriptions(&app);
+    detect_all_tools(Some(&descriptions))
 }
 
 #[tauri::command]

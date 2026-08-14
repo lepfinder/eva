@@ -99,7 +99,7 @@ pub struct VisualRecallState(SharedVrInner);
 // 路径辅助
 // ─────────────────────────────────────────
 
-fn db_path(data_path: &Path) -> PathBuf {
+pub fn db_path(data_path: &Path) -> PathBuf {
     data_path.join("visual_recall.db")
 }
 
@@ -172,7 +172,7 @@ fn db_insert(
     Some(conn.last_insert_rowid())
 }
 
-fn db_query_by_time_range(
+pub fn db_query_by_time_range(
     data_path: &Path,
     start_ts: i64,
     end_ts: i64,
@@ -466,35 +466,106 @@ fn try_capture(inner: &mut VrInner, app_name: String, window_title: String) -> O
 // ─────────────────────────────────────────
 
 fn get_active_window() -> Option<(String, String)> {
-    let script = r#"tell application "System Events"
-    set frontApp to name of first application process whose frontmost is true
-    set windowTitle to ""
-    try
-        tell process frontApp
-            if exists (1st window whose value of attribute "AXMain" is true) then
-                set windowTitle to name of 1st window whose value of attribute "AXMain" is true
-            else if exists (1st window) then
-                set windowTitle to name of 1st window
-            end if
-        end tell
-    end try
-    return frontApp & "|||" & windowTitle
-end tell"#;
-
-    let out = Command::new("osascript")
-        .arg("-e")
-        .arg(script)
+    // 使用 lsappinfo（直接查询 WindowServer）获取前台应用的精确身份，
+    // 按 ASN 独立标识，即使多个进程共享 com.github.Electron bundle ID 也不会混淆。
+    let front_asn = Command::new("lsappinfo")
+        .arg("front")
         .output()
         .ok()?;
-    let result = String::from_utf8_lossy(&out.stdout);
-    let result = result.trim();
-    let mut parts = result.splitn(2, "|||");
-    let app = parts.next()?.trim().to_string();
-    let title = parts.next().unwrap_or("").trim().to_string();
+    let asn = String::from_utf8_lossy(&front_asn.stdout).trim().to_string();
+    if asn.is_empty() {
+        return None;
+    }
+
+    let info_out = Command::new("lsappinfo")
+        .args(["info", "-only", "name", "-only", "pid", "-only", "bundleid", "-only", "bundlepath", &asn])
+        .output()
+        .ok()?;
+    let info = String::from_utf8_lossy(&info_out.stdout);
+
+    let mut display_name = String::new();
+    let mut pid_str = String::new();
+    let mut bundle_id = String::new();
+    let mut bundle_path = String::new();
+
+    for line in info.lines() {
+        let line = line.trim();
+        if let Some(val) = line.strip_prefix("\"LSDisplayName\"=") {
+            display_name = val.trim_matches('"').to_string();
+        } else if let Some(val) = line.strip_prefix("\"pid\"=") {
+            pid_str = val.to_string();
+        } else if let Some(val) = line.strip_prefix("\"CFBundleIdentifier\"=") {
+            bundle_id = val.trim_matches('"').to_string();
+        } else if let Some(val) = line.strip_prefix("\"LSBundlePath\"=") {
+            bundle_path = val.trim_matches('"').to_string();
+        }
+    }
+
+    let pid: u32 = pid_str.parse().ok()?;
+
+    // 对于通用 Electron 进程，从 bundle path 推断实际应用名
+    let app = if bundle_id == "com.github.Electron" && !bundle_path.is_empty() {
+        extract_vr_project_name(&bundle_path).unwrap_or(display_name)
+    } else {
+        display_name
+    };
+
+    // 用精确 PID 获取窗口标题
+    let title_script = format!(
+        r#"tell application "System Events"
+    set p to first application process whose unix id is {}
+    set windowTitle to ""
+    try
+        if exists (1st window of p whose value of attribute "AXMain" is true) then
+            set windowTitle to name of 1st window of p whose value of attribute "AXMain" is true
+        else if exists (1st window of p) then
+            set windowTitle to name of 1st window of p
+        end if
+    end try
+    return windowTitle
+end tell"#,
+        pid
+    );
+
+    let title_out = Command::new("osascript")
+        .arg("-e")
+        .arg(&title_script)
+        .output()
+        .ok();
+    let title = title_out
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_default();
+
     if app.is_empty() {
         return None;
     }
     Some((app, title))
+}
+
+/// 从 bundle path 推断项目名（与 activity_tracker 中的逻辑一致）
+fn extract_vr_project_name(bundle_path: &str) -> Option<String> {
+    if bundle_path.starts_with("/Applications/") {
+        let app_name = bundle_path
+            .strip_prefix("/Applications/")?
+            .strip_suffix(".app")
+            .or_else(|| bundle_path.strip_prefix("/Applications/"))?;
+        return Some(app_name.to_string());
+    }
+    if let Some(idx) = bundle_path.find("/node_modules/") {
+        let prefix = &bundle_path[..idx];
+        let project = prefix.rsplit('/').next()?;
+        if !project.is_empty() {
+            return Some(project.to_string());
+        }
+    }
+    if let Some(idx) = bundle_path.rfind(".app") {
+        let before_app = &bundle_path[..idx];
+        let name = before_app.rsplit('/').next()?;
+        if !name.is_empty() && name != "Electron" {
+            return Some(name.to_string());
+        }
+    }
+    None
 }
 
 // ─────────────────────────────────────────

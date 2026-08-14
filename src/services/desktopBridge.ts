@@ -141,14 +141,15 @@ const appApi: Record<string, AnyFn> = {
 
 // Clipboard history
 const clipboardApi: Record<string, AnyFn> = {
-  getItems: (limit?: number, offset?: number) =>
-    invoke('clipboard_get_items', { limit, offset }),
-  searchItems: (query: string, limit?: number) =>
-    invoke('clipboard_search_items', { query, limit }),
+  getItems: (limit?: number, offset?: number, dateFilter?: string) =>
+    invoke('clipboard_get_items', { limit, offset, dateFilter }),
+  searchItems: (query: string, limit?: number, dateFilter?: string) =>
+    invoke('clipboard_search_items', { query, limit, dateFilter }),
   deleteItem: (id: string) => invoke('clipboard_delete_item', { id }),
   clearAll: () => invoke('clipboard_clear_all'),
   writeToClipboard: (id: string) => invoke('clipboard_write_to_clipboard', { id }),
   getStats: () => invoke('clipboard_get_stats'),
+  getDailyStats: () => invoke('clipboard_get_daily_stats'),
   // Real-time push: listen for clipboard:newItem Tauri events
   onNewItem: (callback: (item: any) => void) => {
     let unlisten: (() => void) | null = null

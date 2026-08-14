@@ -78,6 +78,7 @@ pub struct HeatmapDataPoint {
 struct CurrentActivity {
     app_name: String,
     window_title: String,
+    project_name: Option<String>,
     start_time: i64,
 }
 
@@ -102,14 +103,14 @@ pub type SharedActivityState = Arc<Mutex<ActivityState>>;
 // Helpers
 // ──────────────────────────────────────────────────
 
-fn now_ms() -> i64 {
+pub fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as i64
 }
 
-fn date_range(date_str: &str) -> (i64, i64) {
+pub fn date_range(date_str: &str) -> (i64, i64) {
     // Parse YYYY-MM-DD → local midnight timestamps
     let parts: Vec<&str> = date_str.split('-').collect();
     if parts.len() != 3 {
@@ -173,6 +174,8 @@ fn static_category(app: &str) -> Option<&'static str> {
     let rules: &[(&str, &str)] = &[
         ("Code", "development"),
         ("Visual Studio Code", "development"),
+        ("VS Code", "development"),
+        ("Antigravity", "development"),
         ("IntelliJ IDEA", "development"),
         ("WebStorm", "development"),
         ("PyCharm", "development"),
@@ -180,9 +183,11 @@ fn static_category(app: &str) -> Option<&'static str> {
         ("Warp", "development"),
         ("Cursor", "development"),
         ("Sublime Text", "development"),
+        ("sublime_text", "development"),
         ("Trae", "development"),
         ("Navicat", "development"),
         ("Terminal", "development"),
+        ("Postman", "development"),
         ("iTerm2", "operations"),
         ("iTerm", "operations"),
         ("Google Chrome", "browsing"),
@@ -190,6 +195,7 @@ fn static_category(app: &str) -> Option<&'static str> {
         ("Firefox", "browsing"),
         ("Microsoft Edge", "browsing"),
         ("Arc", "browsing"),
+        ("Brave", "browsing"),
         ("Slack", "communication"),
         ("Discord", "communication"),
         ("WeChat", "communication"),
@@ -207,6 +213,13 @@ fn static_category(app: &str) -> Option<&'static str> {
         ("Notes", "writing"),
         ("Bear", "writing"),
         ("Typora", "writing"),
+        ("WorkBuddy", "productivity"),
+        ("EVA", "productivity"),
+        ("小暖", "productivity"),
+        ("暖窗", "productivity"),
+        ("智谱AI", "productivity"),
+        ("ChatGPT", "productivity"),
+        ("Claude", "productivity"),
         ("Microsoft Excel", "productivity"),
         ("Microsoft PowerPoint", "productivity"),
         ("Figma", "design"),
@@ -230,9 +243,16 @@ fn static_category(app: &str) -> Option<&'static str> {
             return Some(cat);
         }
     }
+    // Case-insensitive match
+    let lower_app = app.to_lowercase();
+    for (key, cat) in rules {
+        if key.to_lowercase() == lower_app {
+            return Some(cat);
+        }
+    }
     // Contains match
     for (key, cat) in rules {
-        if app.contains(key) {
+        if lower_app.contains(&key.to_lowercase()) {
             return Some(cat);
         }
     }
@@ -256,40 +276,274 @@ fn classify_app(app: &str) -> &'static str {
 }
 
 // ──────────────────────────────────────────────────
+// Intelligent App Identity Resolution
+// ──────────────────────────────────────────────────
+
+fn resolve_app_identity(
+    p_name: &str,
+    d_name: &str,
+    b_id: &str,
+    title: &str,
+) -> (String, Option<String>) {
+    let p_name = p_name.trim();
+    let d_name = d_name.trim();
+    let b_id = b_id.trim();
+    let title = title.trim();
+
+    let is_generic = |name: &str| -> bool {
+        let lower = name.to_lowercase();
+        lower.is_empty()
+            || lower == "missing value"
+            || lower == "electron"
+            || lower == "electron helper"
+            || lower == "node"
+            || lower == "java"
+            || lower == "python"
+            || lower == "python3"
+            || lower == "osascript"
+            || lower == "unknown"
+    };
+
+    // 1. If displayed name is valid and specific, use it
+    let mut resolved_app = if !is_generic(d_name) {
+        d_name.to_string()
+    } else if !is_generic(p_name) {
+        p_name.to_string()
+    } else {
+        String::new()
+    };
+
+    let mut project_name: Option<String> = None;
+
+    // 2. Resolve from Bundle Identifier if still generic/empty
+    if resolved_app.is_empty() && !is_generic(b_id) {
+        let lower_bid = b_id.to_lowercase();
+        if lower_bid.contains("antigravity") {
+            resolved_app = "Antigravity".to_string();
+        } else if lower_bid.contains("workbuddy") {
+            resolved_app = "WorkBuddy".to_string();
+        } else if lower_bid.contains("vscode") {
+            resolved_app = "Visual Studio Code".to_string();
+        } else if lower_bid.contains("cursor") {
+            resolved_app = "Cursor".to_string();
+        } else if lower_bid.contains("obsidian") {
+            resolved_app = "Obsidian".to_string();
+        } else if lower_bid.contains("notion") {
+            resolved_app = "Notion".to_string();
+        } else if lower_bid.contains("slack") {
+            resolved_app = "Slack".to_string();
+        } else if lower_bid.contains("wechat") {
+            resolved_app = "WeChat".to_string();
+        } else if lower_bid.contains("eva") {
+            resolved_app = "EVA".to_string();
+        } else if let Some(last) = b_id.split('.').last() {
+            if !last.is_empty() && !is_generic(last) {
+                resolved_app = last.to_string();
+            }
+        }
+    }
+
+    // 3. Inspect Window Title for code editor workspaces & specific apps
+    if !title.is_empty() {
+        let parts: Vec<&str> = if title.contains(" — ") {
+            title.split(" — ").collect()
+        } else if title.contains(" - ") {
+            title.split(" - ").collect()
+        } else {
+            vec![]
+        };
+
+        if !parts.is_empty() {
+            let left = parts[0].trim();
+            let right = parts[parts.len() - 1].trim();
+
+            let raw_proj = left.replace("(Workspace)", "").trim().to_string();
+            if !raw_proj.is_empty() && raw_proj != "Untitled" {
+                project_name = Some(raw_proj.clone());
+            }
+
+            if resolved_app.is_empty() || resolved_app == "Electron" {
+                let is_code_file = parts.iter().any(|p| {
+                    p.contains('.') && (
+                        p.ends_with(".ts") || p.ends_with(".tsx") || p.ends_with(".js") ||
+                        p.ends_with(".rs") || p.ends_with(".py") || p.ends_with(".go") ||
+                        p.ends_with(".java") || p.ends_with(".md") || p.ends_with(".json") ||
+                        p.ends_with(".yaml") || p.ends_with(".yml") || p.ends_with(".html") ||
+                        p.ends_with(".css") || p.ends_with(".vue") || p.ends_with(".sh") ||
+                        p.ends_with(".cpp") || p.ends_with(".c") || p.ends_with(".h") ||
+                        p.ends_with(".png") || p.ends_with(".jpg") || p.ends_with(".txt")
+                    ) || p.contains("(Working Tree)")
+                });
+
+                if is_code_file || left.contains("(Workspace)") {
+                    resolved_app = "Antigravity".to_string();
+                } else if !right.is_empty() && (right == "Google Chrome" || right == "Arc" || right == "Safari" || right == "Slack" || right == "Notion") {
+                    resolved_app = right.to_string();
+                }
+            }
+        }
+
+        if resolved_app.is_empty() || resolved_app == "Electron" {
+            if title.contains("WorkBuddy") {
+                resolved_app = "WorkBuddy".to_string();
+            } else if title.contains("小暖") {
+                resolved_app = "小暖".to_string();
+            } else if title.contains("暖窗") {
+                resolved_app = "暖窗".to_string();
+            } else if title.contains("智谱AI") {
+                resolved_app = "智谱AI".to_string();
+            } else if title.contains("EVA") || title.contains("eva") {
+                resolved_app = "EVA".to_string();
+            } else if title.contains("MiniMax") {
+                resolved_app = "MiniMax".to_string();
+            } else if title.contains("ChatGPT") {
+                resolved_app = "ChatGPT".to_string();
+            } else if title.contains("Claude") {
+                resolved_app = "Claude".to_string();
+            } else if title.chars().count() <= 30 && !title.contains('/') && !title.contains('\\') {
+                resolved_app = title.to_string();
+            }
+        }
+    }
+
+    if resolved_app.is_empty() {
+        resolved_app = if !p_name.is_empty() { p_name.to_string() } else { "Unknown".to_string() };
+    }
+
+    (resolved_app, project_name)
+}
+
+// ──────────────────────────────────────────────────
 // AppleScript window detection
 // ──────────────────────────────────────────────────
 
-fn get_active_window() -> Option<(String, String)> {
-    let script = r#"tell application "System Events"
-    set frontApp to name of first application process whose frontmost is true
-    set windowTitle to ""
-    try
-        tell process frontApp
-            if exists (1st window whose value of attribute "AXMain" is true) then
-                set windowTitle to name of 1st window whose value of attribute "AXMain" is true
-            else if exists (1st window) then
-                set windowTitle to name of 1st window
-            end if
-        end tell
-    end try
-    return frontApp & "|||" & windowTitle
-end tell"#;
-
-    let out = std::process::Command::new("osascript")
-        .arg("-e")
-        .arg(script)
+pub fn get_active_window() -> Option<(String, String, Option<String>)> {
+    // 方案：lsappinfo（直接查询 WindowServer）获取前台应用的精确身份（按 ASN 独立标识，
+    // 即使多个进程共享 com.github.Electron bundle ID 也不会混淆），
+    // 再用精确 PID 通过 System Events 获取窗口标题。
+    let front_asn = std::process::Command::new("lsappinfo")
+        .arg("front")
         .output()
         .ok()?;
+    let asn = String::from_utf8_lossy(&front_asn.stdout).trim().to_string();
+    if asn.is_empty() {
+        return None;
+    }
 
-    let result = String::from_utf8_lossy(&out.stdout);
-    let result = result.trim();
-    let mut parts = result.splitn(2, "|||");
-    let app = parts.next()?.trim().to_string();
-    let title = parts.next().unwrap_or("").trim().to_string();
+    // 获取 display name, pid, bundle id, bundle path
+    let info_out = std::process::Command::new("lsappinfo")
+        .args(["info", "-only", "name", "-only", "pid", "-only", "bundleid", "-only", "bundlepath", &asn])
+        .output()
+        .ok()?;
+    let info = String::from_utf8_lossy(&info_out.stdout);
+
+    let mut display_name = String::new();
+    let mut pid_str = String::new();
+    let mut bundle_id = String::new();
+    let mut bundle_path = String::new();
+
+    for line in info.lines() {
+        let line = line.trim();
+        if let Some(val) = line.strip_prefix("\"LSDisplayName\"=") {
+            display_name = val.trim_matches('"').to_string();
+        } else if let Some(val) = line.strip_prefix("\"pid\"=") {
+            pid_str = val.to_string();
+        } else if let Some(val) = line.strip_prefix("\"CFBundleIdentifier\"=") {
+            bundle_id = val.trim_matches('"').to_string();
+        } else if let Some(val) = line.strip_prefix("\"LSBundlePath\"=") {
+            bundle_path = val.trim_matches('"').to_string();
+        }
+    }
+
+    let pid: u32 = pid_str.parse().ok()?;
+
+    // 对于通用 Electron 进程（com.github.Electron），从 bundle path 推断实际应用名。
+    // 例如 /Users/.../workspace/personal/HomeCore/node_modules/.../Electron.app → "HomeCore"
+    // 例如 /Users/.../workspace/wiwj/Ada/node_modules/.../Electron.app → "Ada"
+    let effective_name = if bundle_id == "com.github.Electron" && !bundle_path.is_empty() {
+        extract_project_name_from_path(&bundle_path).unwrap_or_else(|| display_name.clone())
+    } else {
+        display_name.clone()
+    };
+
+    // 用精确 PID 获取窗口标题
+    let title_script = format!(
+        r#"tell application "System Events"
+    set p to first application process whose unix id is {}
+    set windowTitle to ""
+    try
+        if exists (1st window of p whose value of attribute "AXMain" is true) then
+            set windowTitle to name of 1st window of p whose value of attribute "AXMain" is true
+        else if exists (1st window of p) then
+            set windowTitle to name of 1st window of p
+        end if
+    end try
+    return windowTitle
+end tell"#,
+        pid
+    );
+
+    let title_out = std::process::Command::new("osascript")
+        .arg("-e")
+        .arg(&title_script)
+        .output()
+        .ok();
+    let title = title_out
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_default();
+
+    if effective_name.is_empty() && title.is_empty() {
+        return None;
+    }
+
+    log::info!(
+        "[ActivityTracker] lsappinfo: name={:?} bid={:?} bpath={:?} eff={:?} pid={} title={:?}",
+        display_name, bundle_id, bundle_path, effective_name, pid, title
+    );
+
+    let (app, project) = resolve_app_identity(&effective_name, &effective_name, &bundle_id, &title);
+
+    log::info!("[ActivityTracker] resolved: app={:?} project={:?}", app, project);
+
     if app.is_empty() {
         return None;
     }
-    Some((app, title))
+
+    Some((app, title, project))
+}
+
+/// 从 Electron 开发应用的 bundle path 中提取项目名。
+/// 例如 "/Users/x/workspace/personal/HomeCore/node_modules/.../Electron.app" → "HomeCore"
+/// 例如 "/Applications/WorkBuddy.app" → "WorkBuddy"
+fn extract_project_name_from_path(bundle_path: &str) -> Option<String> {
+    // 如果是 /Applications/xxx.app，取 xxx
+    if bundle_path.starts_with("/Applications/") {
+        let app_name = bundle_path
+            .strip_prefix("/Applications/")?
+            .strip_suffix(".app")
+            .or_else(|| bundle_path.strip_prefix("/Applications/"))?;
+        return Some(app_name.to_string());
+    }
+
+    // 如果路径含 node_modules，取 node_modules 之前的最后一段作为项目名
+    if let Some(idx) = bundle_path.find("/node_modules/") {
+        let prefix = &bundle_path[..idx];
+        let project = prefix.rsplit('/').next()?;
+        if !project.is_empty() {
+            return Some(project.to_string());
+        }
+    }
+
+    // 兜底：取路径中 .app 之前的目录名
+    if let Some(idx) = bundle_path.rfind(".app") {
+        let before_app = &bundle_path[..idx];
+        let name = before_app.rsplit('/').next()?;
+        if !name.is_empty() && name != "Electron" {
+            return Some(name.to_string());
+        }
+    }
+
+    None
 }
 
 // ──────────────────────────────────────────────────
@@ -386,7 +640,7 @@ fn init_db(conn: &Connection) -> rusqlite::Result<()> {
     Ok(())
 }
 
-fn db_save_activity(conn: &Connection, app: &str, title: &str, start: i64, end: i64) {
+fn db_save_activity(conn: &Connection, app: &str, title: &str, project_name: Option<&str>, start: i64, end: i64) {
     let duration = (end - start) / 1000;
     if duration < 5 {
         return;
@@ -394,8 +648,8 @@ fn db_save_activity(conn: &Connection, app: &str, title: &str, start: i64, end: 
     let category = classify_app(app);
     let classified = if category != "other" { 1 } else { 0 };
     let _ = conn.execute(
-        "INSERT INTO activity_logs (id, app_name, window_title, start_time, end_time, duration, category, classified)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        "INSERT INTO activity_logs (id, app_name, window_title, start_time, end_time, duration, category, project_name, classified)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
         params![
             Uuid::new_v4().to_string(),
             app,
@@ -404,6 +658,7 @@ fn db_save_activity(conn: &Connection, app: &str, title: &str, start: i64, end: 
             end,
             duration,
             category,
+            project_name,
             classified
         ],
     );
@@ -436,7 +691,7 @@ pub fn start_polling(state: SharedActivityState) {
             // Save current activity, discard gap
             if let Some(ref cur) = guard.current.take() {
                 if let Some(conn) = guard.conn() {
-                    db_save_activity(&conn, &cur.app_name, &cur.window_title, cur.start_time, guard.last_sample_ts);
+                    db_save_activity(&conn, &cur.app_name, &cur.window_title, cur.project_name.as_deref(), cur.start_time, guard.last_sample_ts);
                 }
             }
             guard.was_idle = false;
@@ -447,7 +702,7 @@ pub fn start_polling(state: SharedActivityState) {
             if !guard.is_suspended {
                 if let Some(ref cur) = guard.current.take() {
                     if let Some(conn) = guard.conn() {
-                        db_save_activity(&conn, &cur.app_name, &cur.window_title, cur.start_time, now);
+                        db_save_activity(&conn, &cur.app_name, &cur.window_title, cur.project_name.as_deref(), cur.start_time, now);
                     }
                 }
                 guard.was_idle = false;
@@ -472,12 +727,13 @@ pub fn start_polling(state: SharedActivityState) {
         if is_idle && !guard.was_idle {
             if let Some(ref cur) = guard.current.take() {
                 if let Some(conn) = guard.conn() {
-                    db_save_activity(&conn, &cur.app_name, &cur.window_title, cur.start_time, now);
+                    db_save_activity(&conn, &cur.app_name, &cur.window_title, cur.project_name.as_deref(), cur.start_time, now);
                 }
             }
             guard.current = Some(CurrentActivity {
                 app_name: "Distracted".to_string(),
                 window_title: "Idle".to_string(),
+                project_name: None,
                 start_time: now,
             });
             guard.was_idle = true;
@@ -488,7 +744,7 @@ pub fn start_polling(state: SharedActivityState) {
         if !is_idle && guard.was_idle {
             if let Some(ref cur) = guard.current.take() {
                 if let Some(conn) = guard.conn() {
-                    db_save_activity(&conn, &cur.app_name, &cur.window_title, cur.start_time, now);
+                    db_save_activity(&conn, &cur.app_name, &cur.window_title, cur.project_name.as_deref(), cur.start_time, now);
                 }
             }
             guard.was_idle = false;
@@ -507,7 +763,7 @@ pub fn start_polling(state: SharedActivityState) {
             Err(_) => continue,
         };
 
-        let (app, title) = match window {
+        let (app, title, project) = match window {
             Some(w) => w,
             None => continue,
         };
@@ -519,15 +775,18 @@ pub fn start_polling(state: SharedActivityState) {
                 guard.current = Some(CurrentActivity {
                     app_name: app,
                     window_title: title,
+                    project_name: project,
                     start_time: now2,
                 });
             }
             Some(cur) if cur.app_name == app => {
-                // Same app — update title in place
+                // Same app — update title and project in place
                 let start = cur.start_time;
+                let proj = project.or_else(|| cur.project_name.clone());
                 guard.current = Some(CurrentActivity {
                     app_name: app,
                     window_title: title,
+                    project_name: proj,
                     start_time: start,
                 });
             }
@@ -535,11 +794,12 @@ pub fn start_polling(state: SharedActivityState) {
                 // App changed — save old record
                 let old = guard.current.take().unwrap();
                 if let Some(conn) = guard.conn() {
-                    db_save_activity(&conn, &old.app_name, &old.window_title, old.start_time, now2);
+                    db_save_activity(&conn, &old.app_name, &old.window_title, old.project_name.as_deref(), old.start_time, now2);
                 }
                 guard.current = Some(CurrentActivity {
                     app_name: app,
                     window_title: title,
+                    project_name: project,
                     start_time: now2,
                 });
 
@@ -634,7 +894,7 @@ fn update_daily_stats_impl(conn: &Connection) {
     );
 }
 
-fn chrono_date_str(ms: i64) -> String {
+pub fn chrono_date_str(ms: i64) -> String {
     // Convert ms timestamp → YYYY-MM-DD in local time
     // Use `date` command
     let secs = ms / 1000;
@@ -656,19 +916,8 @@ fn chrono_date_str(ms: i64) -> String {
     format!("1970-{}", days) // should never hit
 }
 
-// ──────────────────────────────────────────────────
-// Tauri Commands
-// ──────────────────────────────────────────────────
-
-#[tauri::command]
-pub fn activity_get_today_stats(
-    state: tauri::State<SharedActivityState>,
-    date: Option<String>,
-) -> Vec<AppStat> {
-    let guard = match state.lock() { Ok(g) => g, Err(_) => return vec![] };
-    let conn = match guard.conn() { Some(c) => c, None => return vec![] };
-    let date_str = date.unwrap_or_else(|| chrono_date_str(now_ms()));
-    let (start, end) = date_range(&date_str);
+pub fn db_get_app_stats(conn: &Connection, date_str: &str) -> Vec<AppStat> {
+    let (start, end) = date_range(date_str);
 
     let mut stmt = match conn.prepare(
         "SELECT app_name, SUM(duration) FROM activity_logs WHERE start_time>=?1 AND start_time<?2 GROUP BY app_name ORDER BY SUM(duration) DESC"
@@ -687,6 +936,124 @@ pub fn activity_get_today_stats(
             percentage: if total > 0 { dur * 100 / total } else { 0 },
         })
         .collect()
+}
+
+pub fn db_get_category_stats(conn: &Connection, date_str: &str) -> Vec<CategoryStat> {
+    let (start, end) = date_range(date_str);
+
+    let mut stmt = match conn.prepare(
+        "SELECT COALESCE(NULLIF(category,''),'other'), SUM(duration)
+         FROM activity_logs WHERE start_time>=?1 AND start_time<?2 AND category!='rest'
+         GROUP BY COALESCE(NULLIF(category,''),'other')
+         ORDER BY SUM(duration) DESC"
+    ) { Ok(s) => s, Err(_) => return vec![] };
+
+    let rows: Vec<(String, i64)> = stmt
+        .query_map(params![start, end], |r| Ok((r.get(0)?, r.get(1)?)))
+        .map(|rows| rows.flatten().collect::<Vec<_>>())
+        .unwrap_or_default();
+
+    let total: i64 = rows.iter().map(|r| r.1).sum();
+    rows.into_iter()
+        .map(|(cat, dur)| CategoryStat {
+            category: cat,
+            total_duration: dur,
+            percentage: if total > 0 { dur * 100 / total } else { 0 },
+        })
+        .collect()
+}
+
+pub fn db_get_project_stats(conn: &Connection, date_str: &str) -> Vec<ProjectStat> {
+    let (start, end) = date_range(date_str);
+
+    let mut stmt = match conn.prepare(
+        "SELECT project_name, SUM(duration) FROM activity_logs
+         WHERE start_time>=?1 AND start_time<?2 AND project_name IS NOT NULL AND project_name!=''
+         GROUP BY project_name ORDER BY SUM(duration) DESC LIMIT 10"
+    ) { Ok(s) => s, Err(_) => return vec![] };
+
+    let rows: Vec<(String, i64)> = stmt
+        .query_map(params![start, end], |r| Ok((r.get(0)?, r.get(1)?)))
+        .map(|rows| rows.flatten().collect::<Vec<_>>())
+        .unwrap_or_default();
+
+    let total: i64 = rows.iter().map(|r| r.1).sum();
+    rows.into_iter()
+        .map(|(proj, dur)| ProjectStat {
+            project_name: proj,
+            total_duration: dur,
+            percentage: if total > 0 { dur * 100 / total } else { 0 },
+        })
+        .collect()
+}
+
+fn row_to_activity_log(r: &rusqlite::Row<'_>) -> rusqlite::Result<ActivityLog> {
+    let tags_str: Option<String> = r.get(8)?;
+    let tags: Option<Vec<String>> = tags_str.as_deref().and_then(|s| serde_json::from_str(s).ok());
+    Ok(ActivityLog {
+        id: r.get(0)?,
+        app_name: r.get(1)?,
+        window_title: r.get(2)?,
+        start_time: r.get(3)?,
+        end_time: r.get(4)?,
+        duration: r.get(5)?,
+        category: r.get(6)?,
+        project_name: r.get(7)?,
+        tags,
+        classified: r.get::<_, i32>(9)? != 0,
+        remark: r.get(10)?,
+    })
+}
+
+pub fn db_get_logs(conn: &Connection, date_str: &str, limit: i64, app_filter: Option<&str>) -> Vec<ActivityLog> {
+    let (start, end) = date_range(date_str);
+    if let Some(app) = app_filter {
+        let mut stmt = match conn.prepare(
+            "SELECT id, app_name, window_title, start_time, end_time, duration, category, project_name, tags, classified, remark
+             FROM activity_logs WHERE start_time>=?1 AND start_time<?2 AND app_name=?3 ORDER BY start_time DESC LIMIT ?4"
+        ) {
+            Ok(s) => s,
+            Err(_) => return vec![],
+        };
+        stmt.query_map(params![start, end, app, limit], row_to_activity_log)
+            .map(|rows| rows.flatten().collect())
+            .unwrap_or_default()
+    } else {
+        let mut stmt = match conn.prepare(
+            "SELECT id, app_name, window_title, start_time, end_time, duration, category, project_name, tags, classified, remark
+             FROM activity_logs WHERE start_time>=?1 AND start_time<?2 ORDER BY start_time DESC LIMIT ?3"
+        ) {
+            Ok(s) => s,
+            Err(_) => return vec![],
+        };
+        stmt.query_map(params![start, end, limit], row_to_activity_log)
+            .map(|rows| rows.flatten().collect())
+            .unwrap_or_default()
+    }
+}
+
+pub fn db_get_total_duration(conn: &Connection, date_str: &str) -> i64 {
+    let (start, end) = date_range(date_str);
+    conn.query_row(
+        "SELECT COALESCE(SUM(duration),0) FROM activity_logs WHERE start_time>=?1 AND start_time<?2",
+        params![start, end],
+        |r| r.get(0),
+    ).unwrap_or(0)
+}
+
+// ──────────────────────────────────────────────────
+// Tauri Commands
+// ──────────────────────────────────────────────────
+
+#[tauri::command]
+pub fn activity_get_today_stats(
+    state: tauri::State<SharedActivityState>,
+    date: Option<String>,
+) -> Vec<AppStat> {
+    let guard = match state.lock() { Ok(g) => g, Err(_) => return vec![] };
+    let conn = match guard.conn() { Some(c) => c, None => return vec![] };
+    let date_str = date.unwrap_or_else(|| chrono_date_str(now_ms()));
+    db_get_app_stats(&conn, &date_str)
 }
 
 #[tauri::command]
@@ -848,14 +1215,49 @@ pub fn activity_update_remark(
     ).is_ok()
 }
 
+fn migrate_electron_records(conn: &Connection) {
+    let mut select_stmt = match conn.prepare(
+        "SELECT id, window_title FROM activity_logs WHERE app_name = 'Electron' OR app_name = 'Unknown'"
+    ) {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+
+    let rows: Vec<(String, String)> = select_stmt
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+        .map(|r| r.flatten().collect())
+        .unwrap_or_default();
+
+    if rows.is_empty() {
+        return;
+    }
+
+    let _ = conn.execute_batch("BEGIN TRANSACTION;");
+    if let Ok(mut update_stmt) = conn.prepare(
+        "UPDATE activity_logs SET app_name = ?1, project_name = COALESCE(project_name, ?2), category = ?3, classified = 1 WHERE id = ?4"
+    ) {
+        for (id, title) in rows {
+            let (real_app, proj) = resolve_app_identity("Electron", "", "", &title);
+            if real_app != "Electron" && real_app != "Unknown" {
+                let cat = classify_app(&real_app);
+                let _ = update_stmt.execute(params![real_app, proj, cat, id]);
+            }
+        }
+    }
+    let _ = conn.execute_batch("COMMIT;");
+}
+
 /// Re-classify unclassified logs using static rules (no AI in eva)
 #[tauri::command]
 pub fn activity_classify_now(state: tauri::State<SharedActivityState>) -> i64 {
     let guard = match state.lock() { Ok(g) => g, Err(_) => return 0 };
     let conn = match guard.conn() { Some(c) => c, None => return 0 };
 
+    // Also migrate any legacy Electron records
+    migrate_electron_records(&conn);
+
     let mut stmt = match conn.prepare(
-        "SELECT id, app_name, window_title FROM activity_logs WHERE classified=0 OR classified IS NULL ORDER BY start_time DESC LIMIT 500"
+        "SELECT id, app_name, window_title FROM activity_logs WHERE classified=0 OR classified IS NULL OR app_name = 'Electron' ORDER BY start_time DESC LIMIT 1000"
     ) { Ok(s) => s, Err(_) => return 0 };
 
     let rows: Vec<(String, String, String)> = stmt
@@ -864,16 +1266,24 @@ pub fn activity_classify_now(state: tauri::State<SharedActivityState>) -> i64 {
         .unwrap_or_default();
 
     let mut updated = 0i64;
-    for (id, app, _title) in rows {
-        let cat = classify_app(&app);
-        if cat != "other" {
+    for (id, app, title) in rows {
+        let (real_app, proj) = if app == "Electron" || app == "Unknown" {
+            resolve_app_identity(&app, "", "", &title)
+        } else {
+            (app.clone(), None)
+        };
+        let cat = classify_app(&real_app);
+        if cat != "other" || real_app != app {
             if conn.execute(
-                "UPDATE activity_logs SET category=?1, classified=1 WHERE id=?2",
-                params![cat, id],
+                "UPDATE activity_logs SET app_name=?1, project_name=COALESCE(project_name, ?2), category=?3, classified=1 WHERE id=?4",
+                params![real_app, proj, cat, id],
             ).is_ok() {
                 updated += 1;
             }
         }
+    }
+    if updated > 0 {
+        update_daily_stats_impl(&conn);
     }
     updated
 }
@@ -1076,6 +1486,8 @@ pub fn init(app: &AppHandle) -> SharedActivityState {
     // Init schema
     if let Ok(conn) = Connection::open(&db_path) {
         let _ = init_db(&conn);
+        migrate_electron_records(&conn);
+        update_daily_stats_impl(&conn);
     }
 
     let state = Arc::new(Mutex::new(ActivityState {

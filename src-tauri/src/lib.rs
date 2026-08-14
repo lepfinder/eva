@@ -99,6 +99,7 @@ pub fn run() {
             clipboard::clipboard_clear_all,
             clipboard::clipboard_write_to_clipboard,
             clipboard::clipboard_get_stats,
+            clipboard::clipboard_get_daily_stats,
             clipboard::clipboard_get_image_data,
             // ActivityTracker
             activity_tracker::activity_get_today_stats,
