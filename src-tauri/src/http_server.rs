@@ -110,6 +110,7 @@ fn json_response<T: Serialize>(data: &T, status_code: u16) -> Response<std::io::
     resp.add_header(Header::from_bytes(&b"Access-Control-Allow-Origin"[..], &b"*"[..]).unwrap());
     resp.add_header(Header::from_bytes(&b"Access-Control-Allow-Methods"[..], &b"GET, POST, OPTIONS"[..]).unwrap());
     resp.add_header(Header::from_bytes(&b"Access-Control-Allow-Headers"[..], &b"Authorization, Content-Type"[..]).unwrap());
+    resp.add_header(Header::from_bytes(&b"Access-Control-Allow-Private-Network"[..], &b"true"[..]).unwrap());
     resp
 }
 
@@ -161,6 +162,7 @@ fn start_server_thread(
                 resp.add_header(Header::from_bytes(&b"Access-Control-Allow-Origin"[..], &b"*"[..]).unwrap());
                 resp.add_header(Header::from_bytes(&b"Access-Control-Allow-Methods"[..], &b"GET, POST, OPTIONS"[..]).unwrap());
                 resp.add_header(Header::from_bytes(&b"Access-Control-Allow-Headers"[..], &b"Authorization, Content-Type"[..]).unwrap());
+                resp.add_header(Header::from_bytes(&b"Access-Control-Allow-Private-Network"[..], &b"true"[..]).unwrap());
                 let _ = request.respond(resp);
                 continue;
             }
@@ -502,4 +504,58 @@ pub fn http_server_save_config(
 #[tauri::command]
 pub fn http_server_generate_token() -> String {
     format!("eva_sk_{}", uuid::Uuid::new_v4().to_string().replace('-', ""))
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TestConnectionResult {
+    pub success: bool,
+    pub status_code: u16,
+    pub message: String,
+    pub active_window: Option<String>,
+    pub latency_ms: u64,
+}
+
+#[tauri::command]
+pub async fn http_server_test_connection(port: u16, token: String) -> Result<TestConnectionResult, String> {
+    let start = std::time::Instant::now();
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(3))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let url = format!("http://127.0.0.1:{}/api/context", port);
+    let resp = client.get(&url)
+        .header("Authorization", format!("Bearer {}", token))
+        .send()
+        .await
+        .map_err(|e| format!("连接失败 (服务可能未启动或端口被占用): {}", e))?;
+
+    let status = resp.status().as_u16();
+    let text = resp.text().await.unwrap_or_default();
+    let latency = start.elapsed().as_millis() as u64;
+
+    if (200..300).contains(&status) {
+        let body: serde_json::Value = serde_json::from_str(&text).unwrap_or_default();
+        let active = body.get("activeWindow")
+            .and_then(|w| w.get("appName"))
+            .and_then(|a| a.as_str())
+            .map(|s| s.to_string());
+
+        Ok(TestConnectionResult {
+            success: true,
+            status_code: status,
+            message: format!("HTTP {} OK，耗时 {}ms", status, latency),
+            active_window: active,
+            latency_ms: latency,
+        })
+    } else {
+        Ok(TestConnectionResult {
+            success: false,
+            status_code: status,
+            message: format!("HTTP {} 响应异常: {}", status, text),
+            active_window: None,
+            latency_ms: latency,
+        })
+    }
 }

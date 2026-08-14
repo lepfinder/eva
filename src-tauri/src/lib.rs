@@ -92,6 +92,7 @@ pub fn run() {
             http_server::http_server_get_config,
             http_server::http_server_save_config,
             http_server::http_server_generate_token,
+            http_server::http_server_test_connection,
             // LocalPorts
             local_ports::get_listening_ports,
             local_ports::kill_process,

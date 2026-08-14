@@ -222,6 +222,8 @@ const httpServerApi: Record<string, AnyFn> = {
   getConfig: () => invoke('http_server_get_config'),
   saveConfig: (config: any) => invoke('http_server_save_config', { config }),
   generateToken: () => invoke('http_server_generate_token'),
+  testConnection: (port: number, token: string) =>
+    invoke('http_server_test_connection', { port, token }),
 }
 
 export function initDesktopBridge(): void {

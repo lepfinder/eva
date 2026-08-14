@@ -32,51 +32,31 @@ export const AI_PROVIDERS: AiProvider[] = [
     id: 'bailian',
     name: '通义千问（百炼）',
     icon: Flame,
-    baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
-    defaultModel: 'qwen-plus',
-    models: ['qwen-plus', 'qwen-turbo', 'qwen-max', 'qwen-long', 'qwen3-235b-a22b'],
-    apiKeyLink: 'https://bailian.console.aliyun.com/',
+    baseUrl: 'https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1',
+    defaultModel: 'qwen3.8-max',
+    models: ['qwen3.8-max', 'qwen3.6-flash', 'kimi-k2.7-code', 'kimi-k2.6', 'deepseek-v4-pro'],
+    apiKeyLink: 'https://bailian.console.aliyun.com/cn-beijing?tab=plan#/efm/subscription/token-plan/enterprise',
     apiKeyPlaceholder: 'sk-...',
   },
   {
     id: 'deepseek',
     name: 'DeepSeek',
     icon: Bot,
-    baseUrl: 'https://api.deepseek.com/v1',
-    defaultModel: 'deepseek-chat',
-    models: ['deepseek-chat', 'deepseek-reasoner'],
+    baseUrl: 'https://api.deepseek.com',
+    defaultModel: 'deepseek-v4-flash',
+    models: ['deepseek-v4-flash', 'deepseek-v4-pro'],
     apiKeyLink: 'https://platform.deepseek.com/api_keys',
     apiKeyPlaceholder: 'sk-...',
   },
   {
-    id: 'glm',
-    name: '智谱 GLM',
-    icon: Brain,
-    baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
-    defaultModel: 'glm-4-flash',
-    models: ['glm-4-flash', 'glm-4-air', 'glm-4', 'glm-z1-flash', 'glm-z1-air'],
-    apiKeyLink: 'https://bigmodel.cn/usercenter/proj-mgmt/apikey',
-    apiKeyPlaceholder: '你的 API Key',
-  },
-  {
-    id: 'minimax',
-    name: 'MiniMax',
-    icon: Zap,
-    baseUrl: 'https://api.minimax.chat/v1',
-    defaultModel: 'MiniMax-Text-01',
-    models: ['MiniMax-Text-01', 'abab6.5s-chat', 'abab5.5s-chat'],
-    apiKeyLink: 'https://platform.minimaxi.com/user-center/basic-information/interface-key',
-    apiKeyPlaceholder: 'eyJ...',
-  },
-  {
-    id: 'gemini',
-    name: 'Google Gemini',
+    id: 'volcano_ark_coding_plan',
+    name: '火山方舟 coding plan',
     icon: Sparkles,
-    baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
-    defaultModel: 'gemini-2.0-flash',
-    models: ['gemini-2.0-flash', 'gemini-2.5-flash-preview-04-17', 'gemini-2.5-pro-preview-05-06', 'gemini-1.5-pro'],
-    apiKeyLink: 'https://aistudio.google.com/app/apikey',
-    apiKeyPlaceholder: 'AIza...',
+    baseUrl: 'https://ark.cn-beijing.volces.com/api/coding',
+    defaultModel: 'deepseek-v4-flash',
+    models: ['deepseek-v4-flash', 'doubao-seed-2.0-mini', 'doubao-seed-evolving', 'minimax-m3', 'kimi-k2.7-code', 'kimi-k3'],
+    apiKeyLink: 'https://console.volcengine.com/ark/region:cn-beijing/subscription/coding-plan?projectName=default',
+    apiKeyPlaceholder: 'sk-...',
   },
 ]
 
@@ -95,7 +75,7 @@ function loadConfig(providerId: string, defaults: AiProvider): ProviderConfig {
   try {
     const raw = localStorage.getItem(lsKey(providerId))
     if (raw) return JSON.parse(raw) as ProviderConfig
-  } catch {}
+  } catch { }
   return { apiKey: '', model: defaults.defaultModel, baseUrl: defaults.baseUrl }
 }
 
@@ -278,11 +258,10 @@ export function AiProviderSettings() {
                     key={m}
                     type="button"
                     onClick={() => updateCfg({ model: m })}
-                    className={`px-2.5 py-1 rounded-full text-xs font-mono border transition-colors ${
-                      cfg.model === m
-                        ? 'bg-primary text-primary-foreground border-primary'
-                        : 'bg-muted text-muted-foreground border-border hover:border-primary/50 hover:text-foreground'
-                    }`}
+                    className={`px-2.5 py-1 rounded-full text-xs font-mono border transition-colors ${cfg.model === m
+                      ? 'bg-primary text-primary-foreground border-primary'
+                      : 'bg-muted text-muted-foreground border-border hover:border-primary/50 hover:text-foreground'
+                      }`}
                   >
                     {m}
                   </button>
@@ -317,11 +296,10 @@ export function AiProviderSettings() {
 
             {/* 状态提示 */}
             {testMessage && (
-              <span className={`flex items-center gap-1 text-xs ${
-                testStatus === 'ok' ? 'text-green-600' :
+              <span className={`flex items-center gap-1 text-xs ${testStatus === 'ok' ? 'text-green-600' :
                 testStatus === 'error' ? 'text-destructive' :
-                'text-muted-foreground'
-              }`}>
+                  'text-muted-foreground'
+                }`}>
                 {testStatus === 'ok' && <CheckCircle2 className="h-3.5 w-3.5" />}
                 {testStatus === 'error' && <AlertCircle className="h-3.5 w-3.5" />}
                 {testMessage}

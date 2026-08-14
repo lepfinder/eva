@@ -145,19 +145,16 @@ export function SettingsPage(): React.ReactElement {
     setTestStatus('testing')
     setTestResult('')
     try {
-      const res = await fetch(`http://127.0.0.1:${apiConfig.port}/api/context`, {
-        headers: {
-          Authorization: `Bearer ${apiConfig.token}`,
-        },
-      })
-      if (res.ok) {
-        const json = await res.json()
+      const res = await window.api.httpServer.testConnection(apiConfig.port, apiConfig.token)
+      if (res && res.success) {
         setTestStatus('success')
-        setTestResult(`连接成功！HTTP 状态码: ${res.status}\n当前聚焦应用: ${json.activeWindow?.appName || '无'}\n今日工作记录: ${json.todayProductivity?.totalMinutes || 0} 分钟\n端口监听数: ${json.listeningPorts?.length || 0}`)
+        setTestResult(`连接成功！${res.message}\n当前活跃聚焦应用: ${res.activeWindow || '无'}\n服务状态: 正常运行于 http://127.0.0.1:${apiConfig.port}`)
+      } else if (res) {
+        setTestStatus('error')
+        setTestResult(res.message || '连接响应异常')
       } else {
         setTestStatus('error')
-        const errText = await res.text()
-        setTestResult(`请求响应异常 (${res.status}): ${errText}`)
+        setTestResult('未能收到测试响应，请确认 API 服务已开启')
       }
     } catch (err: any) {
       setTestStatus('error')
