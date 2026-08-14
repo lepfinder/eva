@@ -45,6 +45,7 @@ sha2 = "0.10"
 hex = "0.4"
 aes = "0.8"
 cbc = { version = "0.1", features = ["std"] }
+tiny_http = "0.12"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc = "0.2"

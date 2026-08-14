@@ -217,6 +217,13 @@ const activityApi: Record<string, AnyFn> = {
   rebuildDailyStats: () => invoke('activity_rebuild_daily_stats'),
 }
 
+// HTTP API Server
+const httpServerApi: Record<string, AnyFn> = {
+  getConfig: () => invoke('http_server_get_config'),
+  saveConfig: (config: any) => invoke('http_server_save_config', { config }),
+  generateToken: () => invoke('http_server_generate_token'),
+}
+
 export function initDesktopBridge(): void {
   if ((window as any).api) return
   // Merge: implemented methods call real Tauri commands; rest fall through to stub defaults.
@@ -233,6 +240,7 @@ export function initDesktopBridge(): void {
       if (key === 'clipboard') return clipboardApi
       if (key === 'onClipboardUrlDetected') return onClipboardUrlDetected
       if (key === 'activity') return activityApi
+      if (key === 'httpServer') return httpServerApi
       return stub[key]
     },
   })

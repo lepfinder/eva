@@ -38,7 +38,21 @@ eva-cli env detect
 eva-cli ports list
 ```
 
-> 📖 **完整 CLI 参数与接口数据格式请参阅 [CLI 使用文档](docs/CLI.md)**。
+> 📖 **完整 CLI 参数请参阅 [CLI 使用文档](docs/CLI.md)**。
+
+---
+
+## 🌐 本地 HTTP REST API（带 Token 鉴权）
+
+EVA 桌面客户端启动时会自动在后台常驻一个轻量安全的 HTTP REST API 服务（默认 `http://127.0.0.1:14220`），支持任何 Agent 框架（如 Dify、LangChain、AutoGPT、OpenAI Assistants 等）通过 HTTP 直接获取上下文：
+
+```bash
+# 获取桌面全景上下文（带 Bearer Token 鉴权）
+curl -H "Authorization: Bearer eva-local-token" \
+  http://127.0.0.1:14220/api/context
+```
+
+> 📖 **完整 REST API 路由规范与 Agent 接入代码请参阅 [REST API 开发文档](docs/API.md)**。
 
 ---
 

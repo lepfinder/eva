@@ -1,6 +1,7 @@
 pub mod activity_tracker;
 pub mod clipboard;
 pub mod env_detector;
+pub mod http_server;
 pub mod local_ports;
 pub mod memory_analyzer;
 pub mod navigation;
@@ -52,6 +53,10 @@ pub fn run() {
             let vr_state = visual_recall::init(app.handle());
             app.manage(vr_state);
 
+            // Initialise local HTTP API server
+            let http_state = http_server::init(app.handle());
+            app.manage(http_state);
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -83,6 +88,10 @@ pub fn run() {
             settings::get_data_dir,
             settings::get_storage_stats,
             settings::open_in_finder,
+            // HTTP API Server Settings
+            http_server::http_server_get_config,
+            http_server::http_server_save_config,
+            http_server::http_server_generate_token,
             // LocalPorts
             local_ports::get_listening_ports,
             local_ports::kill_process,

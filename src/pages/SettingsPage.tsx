@@ -27,6 +27,14 @@ import {
   FileText,
   Wifi,
   Sparkles,
+  Radio,
+  Eye,
+  EyeOff,
+  Copy,
+  Terminal,
+  ShieldCheck,
+  CheckCircle2,
+  XCircle,
 } from 'lucide-react'
 
 // 存储统计类型
@@ -71,7 +79,91 @@ export function SettingsPage(): React.ReactElement {
   const [storageStats, setStorageStats] = useState<StorageStats | null>(null)
   const [loadingStorage, setLoadingStorage] = useState(false)
   const [settings, setSettings] = useState<any>(null)
-  const [activeTab, setActiveTab] = useState<'appearance' | 'security' | 'hotkeys' | 'network' | 'storage' | 'about' | 'ai'>('appearance')
+  const [activeTab, setActiveTab] = useState<'appearance' | 'security' | 'hotkeys' | 'network' | 'storage' | 'about' | 'ai' | 'api'>('appearance')
+
+  // API 服务配置状态
+  const [apiConfig, setApiConfig] = useState<{
+    enabled: boolean
+    port: number
+    token: string
+    running: boolean
+  }>({
+    enabled: true,
+    port: 14220,
+    token: 'eva-local-token',
+    running: false,
+  })
+  const [showToken, setShowToken] = useState(false)
+  const [copiedToken, setCopiedToken] = useState(false)
+  const [savingApiConfig, setSavingApiConfig] = useState(false)
+  const [apiSaveSuccess, setApiSaveSuccess] = useState(false)
+  const [testStatus, setTestStatus] = useState<'idle' | 'testing' | 'success' | 'error'>('idle')
+  const [testResult, setTestResult] = useState<string>('')
+  const [activeCodeLang, setActiveCodeLang] = useState<'curl' | 'python' | 'ts'>('curl')
+
+  useEffect(() => {
+    window.api.httpServer.getConfig().then((cfg: any) => {
+      if (cfg) setApiConfig(cfg)
+    }).catch((e: any) => console.error('Failed to get API config:', e))
+  }, [])
+
+  const handleSaveApiConfig = async () => {
+    setSavingApiConfig(true)
+    setApiSaveSuccess(false)
+    try {
+      const res = await window.api.httpServer.saveConfig(apiConfig)
+      if (res) {
+        setApiConfig(res)
+        setApiSaveSuccess(true)
+        setTimeout(() => setApiSaveSuccess(false), 3000)
+      }
+    } catch (err) {
+      console.error('Failed to save API config:', err)
+    } finally {
+      setSavingApiConfig(false)
+    }
+  }
+
+  const handleGenerateToken = async () => {
+    try {
+      const newToken = await window.api.httpServer.generateToken()
+      if (newToken) {
+        setApiConfig(prev => ({ ...prev, token: newToken }))
+      }
+    } catch (err) {
+      console.error('Failed to generate token:', err)
+    }
+  }
+
+  const handleCopyToken = () => {
+    navigator.clipboard.writeText(apiConfig.token)
+    setCopiedToken(true)
+    setTimeout(() => setCopiedToken(false), 2000)
+  }
+
+  const handleTestApi = async () => {
+    setTestStatus('testing')
+    setTestResult('')
+    try {
+      const res = await fetch(`http://127.0.0.1:${apiConfig.port}/api/context`, {
+        headers: {
+          Authorization: `Bearer ${apiConfig.token}`,
+        },
+      })
+      if (res.ok) {
+        const json = await res.json()
+        setTestStatus('success')
+        setTestResult(`连接成功！HTTP 状态码: ${res.status}\n当前聚焦应用: ${json.activeWindow?.appName || '无'}\n今日工作记录: ${json.todayProductivity?.totalMinutes || 0} 分钟\n端口监听数: ${json.listeningPorts?.length || 0}`)
+      } else {
+        setTestStatus('error')
+        const errText = await res.text()
+        setTestResult(`请求响应异常 (${res.status}): ${errText}`)
+      }
+    } catch (err: any) {
+      setTestStatus('error')
+      setTestResult(`网络连接失败: ${err.message || err}`)
+    }
+  }
 
   useEffect(() => {
     // 获取数据目录路径
@@ -98,8 +190,6 @@ export function SettingsPage(): React.ReactElement {
     }
   }
 
-
-
   const handleLanguageChange = (lang: string): void => {
     changeLanguage(lang)
   }
@@ -107,7 +197,7 @@ export function SettingsPage(): React.ReactElement {
   const handleSettingChange = async (key: string, value: any) => {
     const success = await window.api.settingsSet(key, value)
     if (success) {
-      setSettings(prev => ({ ...prev, [key]: value }))
+      setSettings((prev: any) => ({ ...prev, [key]: value }))
     }
   }
 
@@ -123,7 +213,6 @@ export function SettingsPage(): React.ReactElement {
   const [recordingKeys, setRecordingKeys] = useState<string[]>([])
   const [hotkeyError, setHotkeyError] = useState<string | null>(null)
 
-
   // 快捷键名称映射
   const hotkeyLabels: Record<string, string> = {
     moduleVault: '跳转保险箱',
@@ -135,7 +224,6 @@ export function SettingsPage(): React.ReactElement {
   useEffect(() => {
     window.api.hotkeys.getAll().then(setHotkeys)
   }, [])
-
 
   // 开始录制快捷键
   const startRecording = useCallback((key: string) => {
@@ -159,14 +247,18 @@ export function SettingsPage(): React.ReactElement {
 
     // 获取按键名称
     let key = e.key
-    if (key === ' ') key = 'Space'
-    if (key.length === 1) key = key.toUpperCase()
-
-    // 忽略单独的修饰键
-    if (['Meta', 'Control', 'Alt', 'Shift'].includes(key)) {
+    if (key === 'Control' || key === 'Alt' || key === 'Shift' || key === 'Meta') {
       setRecordingKeys(modifiers)
       return
     }
+
+    // 格式化特殊按键
+    if (key === ' ') key = 'Space'
+    else if (key === 'ArrowUp') key = 'Up'
+    else if (key === 'ArrowDown') key = 'Down'
+    else if (key === 'ArrowLeft') key = 'Left'
+    else if (key === 'ArrowRight') key = 'Right'
+    else if (key.length === 1) key = key.toUpperCase()
 
     const accelerator = [...modifiers, key].join('+')
     setRecordingKeys([...modifiers, key])
@@ -176,7 +268,7 @@ export function SettingsPage(): React.ReactElement {
       setHotkeys(prev => ({ ...prev, [editingKey]: accelerator }))
       setEditingKey(null)
       setRecordingKeys([])
-    }).catch((err) => {
+    }).catch((err: any) => {
       setHotkeyError(`保存失败: ${err.message}`)
     })
   }, [editingKey])
@@ -192,6 +284,7 @@ export function SettingsPage(): React.ReactElement {
     { id: 'appearance', label: t('settings.appearance.title'), icon: <MonitorPlay className="h-4 w-4" /> },
     { id: 'security', label: t('settings.security.title'), icon: <Lock className="h-4 w-4" /> },
     { id: 'ai', label: 'AI 供应商', icon: <Sparkles className="h-4 w-4" /> },
+    { id: 'api', label: 'API 服务', icon: <Radio className="h-4 w-4" /> },
     { id: 'hotkeys', label: '全局快捷键', icon: <Keyboard className="h-4 w-4" /> },
     { id: 'network', label: '网络代理', icon: <Wifi className="h-4 w-4" /> },
     { id: 'storage', label: '存储管理', icon: <HardDrive className="h-4 w-4" /> },
@@ -634,6 +727,257 @@ export function SettingsPage(): React.ReactElement {
                         </div>
                       </>
                     )}
+                  </CardContent>
+                </Card>
+              </div>
+            )}
+
+            {activeTab === 'api' && (
+              <div className="space-y-6 animate-in fade-in duration-300">
+                <Card>
+                  <CardHeader>
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <CardTitle className="flex items-center gap-2">
+                          <Radio className="h-5 w-5 text-primary" />
+                          API 服务 (AI Agent 接入)
+                        </CardTitle>
+                        <CardDescription>
+                          管理本地 HTTP REST API 服务，供外部 AI Agent、自动化脚本安全获取桌面上下文
+                        </CardDescription>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        {apiConfig.enabled ? (
+                          <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
+                            <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
+                            运行中 (127.0.0.1:{apiConfig.port})
+                          </div>
+                        ) : (
+                          <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-muted text-muted-foreground border">
+                            <span className="h-2 w-2 rounded-full bg-muted-foreground" />
+                            已停用
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </CardHeader>
+                  <CardContent className="space-y-6">
+                    {/* 服务开关 */}
+                    <div className="flex items-center justify-between">
+                      <div className="space-y-0.5">
+                        <label className="text-sm font-medium">启用本地 API 服务</label>
+                        <p className="text-xs text-muted-foreground">
+                          开启后，EVA 将在后台监听本地回环端口并处理外部 Agent 请求
+                        </p>
+                      </div>
+                      <Switch
+                        checked={apiConfig.enabled}
+                        onCheckedChange={(checked) => setApiConfig((prev) => ({ ...prev, enabled: checked }))}
+                      />
+                    </div>
+
+                    <Separator />
+
+                    {/* 监听端口 */}
+                    <div className="space-y-2">
+                      <label className="text-sm font-medium">监听端口 (Port)</label>
+                      <Input
+                        type="number"
+                        value={apiConfig.port}
+                        onChange={(e) =>
+                          setApiConfig((prev) => ({ ...prev, port: parseInt(e.target.value) || 14220 }))
+                        }
+                        placeholder="14220"
+                        className="max-w-xs"
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        默认端口 14220。EVA 严格绑定至 <code className="text-xs bg-muted px-1 rounded">127.0.0.1</code> 本地回环地址，拒绝外网及局域网未经授权请求。
+                      </p>
+                    </div>
+
+                    <Separator />
+
+                    {/* 鉴权 Token */}
+                    <div className="space-y-2">
+                      <label className="text-sm font-medium flex items-center justify-between">
+                        <span>访问凭证 (Bearer Token)</span>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          className="h-7 text-xs gap-1"
+                          onClick={handleGenerateToken}
+                        >
+                          <Sparkles className="h-3.5 w-3.5 text-amber-500" />
+                          随机生成新 Token
+                        </Button>
+                      </label>
+                      <div className="flex gap-2">
+                        <div className="relative flex-1">
+                          <Input
+                            type={showToken ? 'text' : 'password'}
+                            value={apiConfig.token}
+                            onChange={(e) => setApiConfig((prev) => ({ ...prev, token: e.target.value }))}
+                            placeholder="例如 eva-local-token"
+                            className="pr-10 font-mono text-sm"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => setShowToken(!showToken)}
+                            className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                          >
+                            {showToken ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                          </button>
+                        </div>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          className="gap-1.5"
+                          onClick={handleCopyToken}
+                        >
+                          {copiedToken ? <Check className="h-4 w-4 text-emerald-500" /> : <Copy className="h-4 w-4" />}
+                          {copiedToken ? '已复制' : '复制'}
+                        </Button>
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        外部调用时必须在 HTTP 请求头添加 <code className="text-xs bg-muted px-1 rounded">Authorization: Bearer {apiConfig.token || '<token>'}</code>。
+                      </p>
+                    </div>
+
+                    <div className="flex items-center gap-3 pt-2">
+                      <Button
+                        onClick={handleSaveApiConfig}
+                        disabled={savingApiConfig}
+                        className="gap-2"
+                      >
+                        {savingApiConfig ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShieldCheck className="h-4 w-4" />}
+                        保存并应用配置
+                      </Button>
+                      {apiSaveSuccess && (
+                        <span className="text-sm text-emerald-600 dark:text-emerald-400 flex items-center gap-1 animate-in fade-in">
+                          <CheckCircle2 className="h-4 w-4" /> 配置已保存并即时生效
+                        </span>
+                      )}
+                    </div>
+                  </CardContent>
+                </Card>
+
+                {/* 联调测试与代码示例 */}
+                <Card>
+                  <CardHeader>
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <CardTitle className="text-base flex items-center gap-2">
+                          <Terminal className="h-4 w-4" />
+                          Agent 接入与连通性测试
+                        </CardTitle>
+                        <CardDescription>
+                          测试本地 HTTP 服务连接或直接复制对应语言的调用示例
+                        </CardDescription>
+                      </div>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={handleTestApi}
+                        disabled={testStatus === 'testing' || !apiConfig.enabled}
+                        className="gap-1.5"
+                      >
+                        {testStatus === 'testing' && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                        测试本地 API 连通性
+                      </Button>
+                    </div>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    {testStatus !== 'idle' && (
+                      <div
+                        className={`p-3 rounded-lg text-xs font-mono whitespace-pre-wrap border ${
+                          testStatus === 'success'
+                            ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-500/20'
+                            : testStatus === 'error'
+                            ? 'bg-destructive/10 text-destructive border-destructive/20'
+                            : 'bg-muted text-muted-foreground'
+                        }`}
+                      >
+                        {testResult || '正在发送测试请求...'}
+                      </div>
+                    )}
+
+                    {/* 代码选项卡 */}
+                    <div className="space-y-2">
+                      <div className="flex gap-2 border-b pb-2">
+                        <button
+                          onClick={() => setActiveCodeLang('curl')}
+                          className={`text-xs px-2.5 py-1 rounded-md font-medium transition-colors ${
+                            activeCodeLang === 'curl'
+                              ? 'bg-primary text-primary-foreground'
+                              : 'text-muted-foreground hover:text-foreground'
+                          }`}
+                        >
+                          cURL
+                        </button>
+                        <button
+                          onClick={() => setActiveCodeLang('python')}
+                          className={`text-xs px-2.5 py-1 rounded-md font-medium transition-colors ${
+                            activeCodeLang === 'python'
+                              ? 'bg-primary text-primary-foreground'
+                              : 'text-muted-foreground hover:text-foreground'
+                          }`}
+                        >
+                          Python (requests)
+                        </button>
+                        <button
+                          onClick={() => setActiveCodeLang('ts')}
+                          className={`text-xs px-2.5 py-1 rounded-md font-medium transition-colors ${
+                            activeCodeLang === 'ts'
+                              ? 'bg-primary text-primary-foreground'
+                              : 'text-muted-foreground hover:text-foreground'
+                          }`}
+                        >
+                          TypeScript / Node
+                        </button>
+                      </div>
+
+                      <div className="relative">
+                        <pre className="p-3 bg-muted/70 rounded-lg text-xs font-mono overflow-x-auto text-foreground">
+                          {activeCodeLang === 'curl' &&
+`curl -H "Authorization: Bearer ${apiConfig.token}" \\
+  http://127.0.0.1:${apiConfig.port}/api/context`}
+                          {activeCodeLang === 'python' &&
+`import requests
+
+url = "http://127.0.0.1:${apiConfig.port}/api/context"
+headers = {"Authorization": "Bearer ${apiConfig.token}"}
+
+response = requests.get(url, headers=headers)
+context_data = response.json()
+print("当前活跃应用:", context_data.get("activeWindow"))`}
+                          {activeCodeLang === 'ts' &&
+`const res = await fetch("http://127.0.0.1:${apiConfig.port}/api/context", {
+  headers: {
+    Authorization: "Bearer ${apiConfig.token}",
+  },
+});
+const data = await res.json();
+console.log("当前活跃应用:", data.activeWindow);`}
+                        </pre>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="absolute right-2 top-2 h-7 px-2 text-xs"
+                          onClick={() => {
+                            const code =
+                              activeCodeLang === 'curl'
+                                ? `curl -H "Authorization: Bearer ${apiConfig.token}" http://127.0.0.1:${apiConfig.port}/api/context`
+                                : activeCodeLang === 'python'
+                                ? `import requests\n\nres = requests.get("http://127.0.0.1:${apiConfig.port}/api/context", headers={"Authorization": "Bearer ${apiConfig.token}"})\nprint(res.json())`
+                                : `const res = await fetch("http://127.0.0.1:${apiConfig.port}/api/context", { headers: { Authorization: "Bearer ${apiConfig.token}" } });\nconsole.log(await res.json());`
+                            navigator.clipboard.writeText(code)
+                          }}
+                        >
+                          <Copy className="h-3.5 w-3.5 mr-1" /> 复制示例
+                        </Button>
+                      </div>
+                    </div>
                   </CardContent>
                 </Card>
               </div>

@@ -117,10 +117,6 @@ eva-cli context
   ```bash
   eva-cli clipboard search "https://github"
   ```
-- **`eva-cli clipboard set "<text>"`**：由 Agent 向系统剪贴板写入文本
-  ```bash
-  eva-cli clipboard set "export const API_KEY = '...'"
-  ```
 
 ---
 
@@ -162,24 +158,87 @@ eva-cli context
   eva-cli recall query --limit 10
   ```
 
+### 8. `eva-cli serve`（本地常驻 HTTP API 服务）
+
+- **`eva-cli serve [--port 14220] [--token <token>]`**：无 GUI 环境下独立启动本地 HTTP REST API 服务。
+  ```bash
+  eva-cli serve --port 14220 --token "eva-local-token"
+  ```
+
+---
+
+## 本地 HTTP REST API（带 Token 鉴权）
+
+除了命令行直接执行外，EVA 内置了高性能本地 REST API，随桌面客户端自启（默认监听 `http://127.0.0.1:14220`），并可在客户端「设置 -> API 服务」中直接开启/修改端口和 Token。
+
+### 鉴权规范
+所有 `/api/*` 请求（除了 `/api/health`）必须在请求头中携带 Bearer Token：
+```http
+Authorization: Bearer <your-token>
+```
+
+### 核心端点一览
+
+| 方法 | 路径 | 描述 |
+|---|---|---|
+| `GET` | `/api/health` | 服务健康检查（免鉴权） |
+| `GET` | `/api/context` | 桌面全景快照（活跃应用/项目、最新剪贴板、活跃端口、今日生产力） |
+| `GET` | `/api/activity/current` | 当前前台活跃窗口 |
+| `GET` | `/api/activity/today` | 今日活动时长、应用排行与分类统计（支持 `?date=YYYY-MM-DD`） |
+| `GET` | `/api/activity/logs` | 历史活动流水记录（支持 `?limit=50&app=Cursor`） |
+| `GET` | `/api/clipboard/latest` | 当前实时剪贴板文本与最近一条记录 |
+| `GET` | `/api/clipboard/list` | 剪贴板历史记录列表（支持 `?limit=20&offset=0`） |
+| `GET` | `/api/clipboard/search` | 关键字检索剪贴板（支持 `?q=react`） |
+| `GET` | `/api/env` | 扫描本地开发工具链（Node, Rust, Python, Docker 等） |
+| `GET` | `/api/ports` | 扫描本地正在监听的 TCP 端口与进程 PID |
+| `POST`| `/api/ports/kill` | 释放指定端口进程（Body: `{"pid": 12345}`） |
+| `GET` | `/api/memory` | 系统内存与应用内存占用分析（支持 `?top=10`） |
+| `GET` | `/api/recall` | 查询视觉记忆/屏幕快照时间线 |
+
 ---
 
 ## 常见 Agent 集成方式
 
-### 1. 在 Python Agent 中调用
+### 1. HTTP API 模式（推荐：适用于任何 Agent 框架、Dify、LangChain、OpenAI Assistants）
+
+```python
+import requests
+
+EVA_API_URL = "http://127.0.0.1:14220/api/context"
+HEADERS = {"Authorization": "Bearer eva-local-token"}
+
+def get_desktop_context():
+    res = requests.get(EVA_API_URL, headers=HEADERS)
+    if res.status_code == 200:
+        return res.json()
+    return None
+```
+
+```typescript
+// TypeScript / Node.js
+async function getDesktopContext() {
+  const res = await fetch("http://127.0.0.1:14220/api/context", {
+    headers: { Authorization: "Bearer eva-local-token" },
+  });
+  return await res.json();
+}
+```
+
+### 2. CLI 进程模式（适用于本地脚本）
 ```python
 import subprocess, json
 
-def get_desktop_context():
+def get_desktop_context_cli():
     res = subprocess.run(["eva-cli", "--compact", "context"], capture_output=True, text=True)
     if res.returncode == 0:
         return json.loads(res.stdout)
     return None
 ```
 
-### 2. 作为 Claude Code / Cursor / Windsurf 扩展工具
-在自定义 Agent 工具或 MCP (Model Context Protocol) 服务中，将 `eva-cli` 封装为只读感知工具，使 Agent 能够：
-1. 感知用户正在阅读或编辑的文件/窗口（通过 `context` 或 `activity current`）。
-2. 读取用户刚才复制的报错信息或链接（通过 `clipboard latest`）。
-3. 检查本地环境是否有缺失的编译器或运行时（通过 `env detect`）。
-4. 确认本地开发端口是否正常启动（通过 `ports list`）。
+### 3. 作为 Claude Code / Cursor / Windsurf 扩展工具
+在自定义 Agent 工具或 MCP (Model Context Protocol) 服务中，将 `eva-cli` 或本地 HTTP API 封装为感知工具，使 Agent 能够：
+1. 感知用户正在阅读或编辑的文件/窗口（通过 `/api/context` 或 `/api/activity/current`）。
+2. 读取用户刚才复制的报错信息或链接（通过 `/api/clipboard/latest`）。
+3. 检查本地环境是否有缺失的编译器或运行时（通过 `/api/env`）。
+4. 确认本地开发端口是否正常启动（通过 `/api/ports`）。
+

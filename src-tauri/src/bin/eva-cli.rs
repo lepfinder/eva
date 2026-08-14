@@ -43,6 +43,20 @@ enum Commands {
 
     /// Query Visual Recall (screen snapshots timeline)
     Recall(RecallArgs),
+
+    /// Start the local HTTP REST API server
+    Serve(ServeArgs),
+}
+
+#[derive(Args, Debug)]
+struct ServeArgs {
+    /// Port to listen on (default: 14220)
+    #[arg(short, long, default_value_t = 14220)]
+    port: u16,
+
+    /// Bearer token for authentication (default: eva-local-token)
+    #[arg(short, long, default_value = "eva-local-token")]
+    token: String,
 }
 
 // ──────────────────────────────────────────────────
@@ -111,11 +125,6 @@ enum ClipboardCommands {
         /// Filter by date in YYYY-MM-DD format
         #[arg(short, long)]
         date: Option<String>,
-    },
-    /// Write text into the system clipboard
-    Set {
-        /// Text content to write into clipboard
-        text: String,
     },
 }
 
@@ -401,22 +410,6 @@ fn main() {
                     std::process::exit(1);
                 }
             }
-            ClipboardCommands::Set { text } => {
-                match clipboard::set_clipboard_text(&text) {
-                    Ok(_) => {
-                        #[derive(Serialize)]
-                        struct SetResult {
-                            success: bool,
-                            message: String,
-                        }
-                        output_json(&SetResult { success: true, message: "Clipboard updated".to_string() }, compact);
-                    }
-                    Err(e) => {
-                        eprintln!("Error setting clipboard: {}", e);
-                        std::process::exit(1);
-                    }
-                }
-            }
         },
 
         Commands::Env(env) => match env.command {
@@ -461,5 +454,16 @@ fn main() {
                 output_json(&snapshots, compact);
             }
         },
+
+        Commands::Serve(serve) => {
+            println!("Starting EVA Local HTTP REST API Server on http://127.0.0.1:{}", serve.port);
+            println!("Bearer Token: {}", serve.token);
+            println!("Health endpoint: http://127.0.0.1:{}/api/health", serve.port);
+            eva_lib::http_server::start_standalone_server(serve.port, serve.token);
+            // Block main thread
+            loop {
+                std::thread::sleep(std::time::Duration::from_secs(3600));
+            }
+        }
     }
 }
