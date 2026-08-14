@@ -212,8 +212,16 @@ const activityApi: Record<string, AnyFn> = {
   getDailySummary: (date: string) => invoke('activity_get_daily_summary', { date }),
   updateRemark: (id: string, remark: string | null) => invoke('activity_update_remark', { id, remark }),
   classifyNow: () => invoke('activity_classify_now'),
-  generateSummary: (date: string) => invoke('activity_generate_summary', { date }),
-  getHeatmapData: (year: number) => invoke('activity_get_heatmap_data', { year }),
+  getHeatmapData: (params?: { year?: number; startDate?: string; endDate?: string } | number) => {
+    if (typeof params === 'number') {
+      return invoke('activity_get_heatmap_data', { year: params })
+    }
+    return invoke('activity_get_heatmap_data', {
+      year: params?.year,
+      startDate: params?.startDate,
+      endDate: params?.endDate,
+    })
+  },
   rebuildDailyStats: () => invoke('activity_rebuild_daily_stats'),
 }
 
@@ -224,6 +232,18 @@ const httpServerApi: Record<string, AnyFn> = {
   generateToken: () => invoke('http_server_generate_token'),
   testConnection: (port: number, token: string) =>
     invoke('http_server_test_connection', { port, token }),
+}
+
+// AI Proxy
+const aiApi: Record<string, AnyFn> = {
+  chatCompletion: (request: {
+    baseUrl: string
+    apiKey: string
+    model: string
+    messages: any
+    maxTokens?: number
+    temperature?: number
+  }) => invoke('ai_chat_completion', { request }),
 }
 
 export function initDesktopBridge(): void {
@@ -243,6 +263,7 @@ export function initDesktopBridge(): void {
       if (key === 'onClipboardUrlDetected') return onClipboardUrlDetected
       if (key === 'activity') return activityApi
       if (key === 'httpServer') return httpServerApi
+      if (key === 'ai') return aiApi
       return stub[key]
     },
   })

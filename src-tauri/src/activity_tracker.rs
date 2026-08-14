@@ -1432,19 +1432,25 @@ pub fn activity_generate_summary(
 #[tauri::command]
 pub fn activity_get_heatmap_data(
     state: tauri::State<SharedActivityState>,
-    year: i32,
+    year: Option<i32>,
+    start_date: Option<String>,
+    end_date: Option<String>,
 ) -> Vec<HeatmapDataPoint> {
     let guard = match state.lock() { Ok(g) => g, Err(_) => return vec![] };
     let conn = match guard.conn() { Some(c) => c, None => return vec![] };
 
-    let start_date = format!("{}-01-01", year);
-    let end_date = format!("{}-01-01", year + 1);
+    let (start, end) = if let (Some(s), Some(e)) = (start_date, end_date) {
+        (s, e)
+    } else {
+        let y = year.unwrap_or(2026);
+        (format!("{}-01-01", y), format!("{}-01-01", y + 1))
+    };
 
     let mut stmt = match conn.prepare(
-        "SELECT date, total_duration, primary_category, productivity_score FROM daily_stats WHERE date>=?1 AND date<?2"
+        "SELECT date, total_duration, primary_category, productivity_score FROM daily_stats WHERE date>=?1 AND date<=?2"
     ) { Ok(s) => s, Err(_) => return vec![] };
 
-    stmt.query_map(params![start_date, end_date], |r| {
+    stmt.query_map(params![start, end], |r| {
         let date: String = r.get(0)?;
         let total: i64 = r.get::<_, Option<i64>>(1)?.unwrap_or(0);
         let primary_cat: Option<String> = r.get(2)?;

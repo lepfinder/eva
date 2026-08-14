@@ -132,7 +132,7 @@ export function AiProviderSettings() {
     setTestMessage('')
   }
 
-  // 连接测试：发一个最小 chat 请求
+  // 连接测试：通过 Rust 后端代理发一个最小 chat 请求（避免浏览器 CORS/Preflight 拦截）
   const handleTest = async () => {
     if (!cfg.apiKey.trim()) {
       setTestStatus('error')
@@ -142,29 +142,41 @@ export function AiProviderSettings() {
     setTestStatus('loading')
     setTestMessage('')
     try {
-      const res = await fetch(`${cfg.baseUrl}/chat/completions`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${cfg.apiKey}`,
-        },
-        body: JSON.stringify({
+      if (window.api?.ai?.chatCompletion) {
+        await window.api.ai.chatCompletion({
+          baseUrl: cfg.baseUrl,
+          apiKey: cfg.apiKey,
           model: cfg.model,
           messages: [{ role: 'user', content: 'hi' }],
-          max_tokens: 5,
-        }),
-      })
-      if (res.ok) {
+          maxTokens: 5,
+        })
         setTestStatus('ok')
         setTestMessage('连接成功')
       } else {
-        const json = await res.json().catch(() => ({}))
-        setTestStatus('error')
-        setTestMessage(json?.error?.message || `HTTP ${res.status}`)
+        const res = await fetch(`${cfg.baseUrl}/chat/completions`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${cfg.apiKey}`,
+          },
+          body: JSON.stringify({
+            model: cfg.model,
+            messages: [{ role: 'user', content: 'hi' }],
+            max_tokens: 5,
+          }),
+        })
+        if (res.ok) {
+          setTestStatus('ok')
+          setTestMessage('连接成功')
+        } else {
+          const json = await res.json().catch(() => ({}))
+          setTestStatus('error')
+          setTestMessage(json?.error?.message || `HTTP ${res.status}`)
+        }
       }
     } catch (e: any) {
       setTestStatus('error')
-      setTestMessage(e?.message || '网络错误')
+      setTestMessage(e?.message || '连接失败')
     }
   }
 

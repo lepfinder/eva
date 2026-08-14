@@ -453,35 +453,26 @@ Entries:
 ${lines}`
 
                         try {
-                            const res = await fetch(`${aiCfg.config.baseUrl}/chat/completions`, {
-                                method: 'POST',
-                                headers: {
-                                    'Content-Type': 'application/json',
-                                    Authorization: `Bearer ${aiCfg.config.apiKey}`,
-                                },
-                                body: JSON.stringify({
-                                    model: aiCfg.config.model,
-                                    messages: [{ role: 'user', content: prompt }],
-                                    max_tokens: 1200,
-                                    temperature: 0,
-                                }),
+                            const data = await window.api.ai.chatCompletion({
+                                baseUrl: aiCfg.config.baseUrl,
+                                apiKey: aiCfg.config.apiKey,
+                                model: aiCfg.config.model,
+                                messages: [{ role: 'user', content: prompt }],
+                                maxTokens: 1200,
+                                temperature: 0,
                             })
-
-                            if (res.ok) {
-                                const data = await res.json()
-                                const text: string = data.choices?.[0]?.message?.content || ''
-                                // Extract JSON array from response (may have markdown fences)
-                                const match = text.match(/\[[\s\S]*\]/)
-                                if (match) {
-                                    const parsed = JSON.parse(match[0]) as Array<{ app: string; title: string; category: string; project?: string | null }>
-                                    for (const item of parsed) {
-                                        allResults.push({
-                                            appName: item.app,
-                                            windowTitle: item.title,
-                                            category: item.category || 'other',
-                                            projectName: item.project || undefined,
-                                        })
-                                    }
+                            const text: string = data.choices?.[0]?.message?.content || ''
+                            // Extract JSON array from response (may have markdown fences)
+                            const match = text.match(/\[[\s\S]*\]/)
+                            if (match) {
+                                const parsed = JSON.parse(match[0]) as Array<{ app: string; title: string; category: string; project?: string | null }>
+                                for (const item of parsed) {
+                                    allResults.push({
+                                        appName: item.app,
+                                        windowTitle: item.title,
+                                        category: item.category || 'other',
+                                        projectName: item.project || undefined,
+                                    })
                                 }
                             }
                         } catch (batchErr) {
@@ -523,25 +514,14 @@ ${lines}`
             // 用 AI 总结
             const prompt = `以下是我今天（${selectedDate}）的电脑使用活动统计数据：\n\n${rawSummary}\n\n请根据这些数据，用中文给我一个简洁友好的工作日总结，包括：\n1. 今天主要做了什么\n2. 时间利用的亮点或问题\n3. 一条具体的改进建议\n保持简短，不超过 150 字。`
 
-            const res = await fetch(`${aiCfg.config.baseUrl}/chat/completions`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    Authorization: `Bearer ${aiCfg.config.apiKey}`,
-                },
-                body: JSON.stringify({
-                    model: aiCfg.config.model,
-                    messages: [{ role: 'user', content: prompt }],
-                    max_tokens: 300,
-                }),
+            const data = await window.api.ai.chatCompletion({
+                baseUrl: aiCfg.config.baseUrl,
+                apiKey: aiCfg.config.apiKey,
+                model: aiCfg.config.model,
+                messages: [{ role: 'user', content: prompt }],
+                maxTokens: 300,
             })
 
-            if (!res.ok) {
-                const err = await res.json().catch(() => ({}))
-                throw new Error(err?.error?.message || `HTTP ${res.status}`)
-            }
-
-            const data = await res.json()
             const aiText = data.choices?.[0]?.message?.content || '（AI 未返回内容）'
             setSummary(`## 📅 ${selectedDate} AI 总结\n\n${aiText}\n\n---\n\n${rawSummary}`)
         } catch (error: any) {

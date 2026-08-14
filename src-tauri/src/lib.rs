@@ -1,4 +1,5 @@
 pub mod activity_tracker;
+pub mod ai;
 pub mod clipboard;
 pub mod env_detector;
 pub mod http_server;
@@ -93,6 +94,8 @@ pub fn run() {
             http_server::http_server_save_config,
             http_server::http_server_generate_token,
             http_server::http_server_test_connection,
+            // AI Proxy
+            ai::ai_chat_completion,
             // LocalPorts
             local_ports::get_listening_ports,
             local_ports::kill_process,
