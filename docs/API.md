@@ -11,14 +11,14 @@ EVA 内置了针对本地 AI Agent、自动化工作流（如 Dify、LangChain�
 * **网络安全**：严格绑定 `127.0.0.1` 本地回环地址，仅限本机进程访问，拒绝外部网络请求。
 * **端口与开关配置**：可在 EVA 桌面端「设置 -> API 服务」中自定义端口与启停服务。
 
-### 1.2 鉴权方式（Bearer Token）
-除 `/api/health` 外，所有接口均需要在 HTTP Request Header 中携带访问令牌：
+### 1.2 鉴权方式（Bearer Token & 可选免密模式）
+* **Token 保护模式（默认）**：需要在 HTTP Request Header 中携带访问令牌：
+  ```http
+  Authorization: Bearer <your-token>
+  ```
+* **本机免 Token 模式**：可在 EVA 桌面端「设置 -> API 服务」中关闭「开启 Token 身份校验」开关（或在 CLI 中使用 `eva-cli serve --no-auth`），此时来自本机 `127.0.0.1` 的请求无需携带 Authorization Header 即可直接调用。
 
-```http
-Authorization: Bearer <your-token>
-```
-
-> 💡 **提示**：默认 Token 为 `eva-local-token`，可在 EVA 客户端「设置 -> API 服务」中直接修改或点击「随机生成新 Token」。
+> 💡 **提示**：默认 Token 为 `eva-local-token`，可在 EVA 客户端「设置 -> API 服务」中直接修改、一键复制或点击「随机生成新 Token」。
 
 ### 1.3 通用响应格式
 * **数据编码**：`application/json; charset=utf-8`

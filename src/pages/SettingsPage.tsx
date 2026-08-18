@@ -9,6 +9,7 @@ import { Switch } from '@/components/ui/switch'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { AiProviderSettings } from '@/components/AiProviderSettings'
 import { changeLanguage, getCurrentLanguage } from '@/i18n'
+import { version as appVersion } from '../../package.json'
 import {
   Check,
   FolderOpen,
@@ -86,11 +87,13 @@ export function SettingsPage(): React.ReactElement {
     enabled: boolean
     port: number
     token: string
+    requireAuth: boolean
     running: boolean
   }>({
     enabled: true,
     port: 14220,
     token: 'eva-local-token',
+    requireAuth: true,
     running: false,
   })
   const [showToken, setShowToken] = useState(false)
@@ -103,7 +106,13 @@ export function SettingsPage(): React.ReactElement {
 
   useEffect(() => {
     window.api.httpServer.getConfig().then((cfg: any) => {
-      if (cfg) setApiConfig(cfg)
+      if (cfg) setApiConfig({
+        enabled: cfg.enabled ?? true,
+        port: cfg.port ?? 14220,
+        token: cfg.token ?? 'eva-local-token',
+        requireAuth: cfg.requireAuth ?? true,
+        running: cfg.running ?? false,
+      })
     }).catch((e: any) => console.error('Failed to get API config:', e))
   }, [])
 
@@ -145,10 +154,10 @@ export function SettingsPage(): React.ReactElement {
     setTestStatus('testing')
     setTestResult('')
     try {
-      const res = await window.api.httpServer.testConnection(apiConfig.port, apiConfig.token)
+      const res = await window.api.httpServer.testConnection(apiConfig.port, apiConfig.token, apiConfig.requireAuth)
       if (res && res.success) {
         setTestStatus('success')
-        setTestResult(`连接成功！${res.message}\n当前活跃聚焦应用: ${res.activeWindow || '无'}\n服务状态: 正常运行于 http://127.0.0.1:${apiConfig.port}`)
+        setTestResult(`连接成功！${res.message}\n当前活跃聚焦应用: ${res.activeWindow || '无'}\n服务状态: 正常运行于 http://127.0.0.1:${apiConfig.port} (${apiConfig.requireAuth ? 'Token 鉴权模式' : '本机免 Token 模式'})`)
       } else if (res) {
         setTestStatus('error')
         setTestResult(res.message || '连接响应异常')
@@ -747,7 +756,7 @@ export function SettingsPage(): React.ReactElement {
                         {apiConfig.enabled ? (
                           <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
                             <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
-                            运行中 (127.0.0.1:{apiConfig.port})
+                            运行中 (127.0.0.1:{apiConfig.port}) {apiConfig.requireAuth ? '· Token 保护' : '· 本机免密'}
                           </div>
                         ) : (
                           <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-muted text-muted-foreground border">
@@ -775,6 +784,31 @@ export function SettingsPage(): React.ReactElement {
 
                     <Separator />
 
+                    {/* Token 鉴权开关 */}
+                    <div className="flex items-center justify-between">
+                      <div className="space-y-0.5">
+                        <div className="flex items-center gap-2">
+                          <label className="text-sm font-medium">开启 Token 身份校验</label>
+                          {!apiConfig.requireAuth && (
+                            <span className="text-[10px] font-medium bg-amber-500/15 text-amber-600 dark:text-amber-400 px-2 py-0.5 rounded-full border border-amber-500/30">
+                              本机免 Token 模式 (127.0.0.1)
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-xs text-muted-foreground">
+                          {apiConfig.requireAuth
+                            ? '已启用保护：外部 Agent 必须在 HTTP 请求头中携带 Authorization: Bearer <token>'
+                            : '已开启免密：本机 Agent 或脚本访问 http://127.0.0.1 时无需携带 Authorization Token，极简接入'}
+                        </p>
+                      </div>
+                      <Switch
+                        checked={apiConfig.requireAuth}
+                        onCheckedChange={(checked) => setApiConfig((prev) => ({ ...prev, requireAuth: checked }))}
+                      />
+                    </div>
+
+                    <Separator />
+
                     {/* 监听端口 */}
                     <div className="space-y-2">
                       <label className="text-sm font-medium">监听端口 (Port)</label>
@@ -795,9 +829,12 @@ export function SettingsPage(): React.ReactElement {
                     <Separator />
 
                     {/* 鉴权 Token */}
-                    <div className="space-y-2">
+                    <div className={`space-y-2 transition-opacity ${apiConfig.requireAuth ? 'opacity-100' : 'opacity-70'}`}>
                       <label className="text-sm font-medium flex items-center justify-between">
-                        <span>访问凭证 (Bearer Token)</span>
+                        <span className="flex items-center gap-2">
+                          <span>访问凭证 (Bearer Token)</span>
+                          {!apiConfig.requireAuth && <span className="text-xs text-muted-foreground">（当前处于免校验模式，可备用）</span>}
+                        </span>
                         <Button
                           type="button"
                           variant="ghost"
@@ -837,7 +874,11 @@ export function SettingsPage(): React.ReactElement {
                         </Button>
                       </div>
                       <p className="text-xs text-muted-foreground">
-                        外部调用时必须在 HTTP 请求头添加 <code className="text-xs bg-muted px-1 rounded">Authorization: Bearer {apiConfig.token || '<token>'}</code>。
+                        {apiConfig.requireAuth ? (
+                          <>外部调用时必须在 HTTP 请求头添加 <code className="text-xs bg-muted px-1 rounded">Authorization: Bearer {apiConfig.token || '<token>'}</code>。</>
+                        ) : (
+                          <>当前已开启免 Token 访问，外部调用时可省略 Authorization 请求头。</>
+                        )}
                       </p>
                     </div>
 
@@ -936,38 +977,35 @@ export function SettingsPage(): React.ReactElement {
 
                       <div className="relative">
                         <pre className="p-3 bg-muted/70 rounded-lg text-xs font-mono overflow-x-auto text-foreground">
-                          {activeCodeLang === 'curl' &&
-`curl -H "Authorization: Bearer ${apiConfig.token}" \\
-  http://127.0.0.1:${apiConfig.port}/api/context`}
-                          {activeCodeLang === 'python' &&
-`import requests
-
-url = "http://127.0.0.1:${apiConfig.port}/api/context"
-headers = {"Authorization": "Bearer ${apiConfig.token}"}
-
-response = requests.get(url, headers=headers)
-context_data = response.json()
-print("当前活跃应用:", context_data.get("activeWindow"))`}
-                          {activeCodeLang === 'ts' &&
-`const res = await fetch("http://127.0.0.1:${apiConfig.port}/api/context", {
-  headers: {
-    Authorization: "Bearer ${apiConfig.token}",
-  },
-});
-const data = await res.json();
-console.log("当前活跃应用:", data.activeWindow);`}
+                          {activeCodeLang === 'curl' && (apiConfig.requireAuth
+                            ? `curl -H "Authorization: Bearer ${apiConfig.token}" \\\n  http://127.0.0.1:${apiConfig.port}/api/context`
+                            : `curl http://127.0.0.1:${apiConfig.port}/api/context`)}
+                          {activeCodeLang === 'python' && (apiConfig.requireAuth
+                            ? `import requests\n\nurl = "http://127.0.0.1:${apiConfig.port}/api/context"\nheaders = {"Authorization": "Bearer ${apiConfig.token}"}\n\nresponse = requests.get(url, headers=headers)\ncontext_data = response.json()\nprint("当前活跃应用:", context_data.get("activeWindow"))`
+                            : `import requests\n\nurl = "http://127.0.0.1:${apiConfig.port}/api/context"\nresponse = requests.get(url)\ncontext_data = response.json()\nprint("当前活跃应用:", context_data.get("activeWindow"))`)}
+                          {activeCodeLang === 'ts' && (apiConfig.requireAuth
+                            ? `const res = await fetch("http://127.0.0.1:${apiConfig.port}/api/context", {\n  headers: {\n    Authorization: "Bearer ${apiConfig.token}",\n  },\n});\nconst data = await res.json();\nconsole.log("当前活跃应用:", data.activeWindow);`
+                            : `const res = await fetch("http://127.0.0.1:${apiConfig.port}/api/context");\nconst data = await res.json();\nconsole.log("当前活跃应用:", data.activeWindow);`)}
                         </pre>
                         <Button
                           variant="ghost"
                           size="sm"
                           className="absolute right-2 top-2 h-7 px-2 text-xs"
                           onClick={() => {
-                            const code =
-                              activeCodeLang === 'curl'
+                            let code = ''
+                            if (activeCodeLang === 'curl') {
+                              code = apiConfig.requireAuth
                                 ? `curl -H "Authorization: Bearer ${apiConfig.token}" http://127.0.0.1:${apiConfig.port}/api/context`
-                                : activeCodeLang === 'python'
+                                : `curl http://127.0.0.1:${apiConfig.port}/api/context`
+                            } else if (activeCodeLang === 'python') {
+                              code = apiConfig.requireAuth
                                 ? `import requests\n\nres = requests.get("http://127.0.0.1:${apiConfig.port}/api/context", headers={"Authorization": "Bearer ${apiConfig.token}"})\nprint(res.json())`
-                                : `const res = await fetch("http://127.0.0.1:${apiConfig.port}/api/context", { headers: { Authorization: "Bearer ${apiConfig.token}" } });\nconsole.log(await res.json());`
+                                : `import requests\n\nres = requests.get("http://127.0.0.1:${apiConfig.port}/api/context")\nprint(res.json())`
+                            } else {
+                              code = apiConfig.requireAuth
+                                ? `const res = await fetch("http://127.0.0.1:${apiConfig.port}/api/context", { headers: { Authorization: "Bearer ${apiConfig.token}" } });\nconsole.log(await res.json());`
+                                : `const res = await fetch("http://127.0.0.1:${apiConfig.port}/api/context");\nconsole.log(await res.json());`
+                            }
                             navigator.clipboard.writeText(code)
                           }}
                         >
@@ -990,7 +1028,7 @@ console.log("当前活跃应用:", data.activeWindow);`}
                   <CardContent className="space-y-2">
                     <div className="flex justify-between">
                       <span className="text-muted-foreground">{t('settings.about.version')}</span>
-                      <span>1.0.0</span>
+                      <span>v{appVersion}</span>
                     </div>
                     <div className="flex justify-between">
                       <span className="text-muted-foreground">Electron</span>

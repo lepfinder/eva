@@ -19,6 +19,7 @@ const DEFAULTS: Record<string, any> = {
   getListeningPorts: [],
   getMemoryAnalysis: { system: { total: 0, used: 0, available: 0, percent: 0, swapTotal: 0, swapUsed: 0 }, apps: [] },
   'env.detect': [],
+  'services.status': [],
   'visual_recall_search_snapshots': { snapshots: [], total: 0 },
   'visual_recall_get_config': { enabled: false, intervalSecs: 10, maxStorageMb: 2048 },
 }
@@ -230,8 +231,8 @@ const httpServerApi: Record<string, AnyFn> = {
   getConfig: () => invoke('http_server_get_config'),
   saveConfig: (config: any) => invoke('http_server_save_config', { config }),
   generateToken: () => invoke('http_server_generate_token'),
-  testConnection: (port: number, token: string) =>
-    invoke('http_server_test_connection', { port, token }),
+  testConnection: (port: number, token: string, requireAuth?: boolean) =>
+    invoke('http_server_test_connection', { port, token, requireAuth }),
 }
 
 // AI Proxy
@@ -244,6 +245,19 @@ const aiApi: Record<string, AnyFn> = {
     maxTokens?: number
     temperature?: number
   }) => invoke('ai_chat_completion', { request }),
+}
+
+// Local dev services
+const servicesApi: Record<string, AnyFn> = {
+  list: () => invoke('service_list'),
+  status: (id?: string) => invoke('service_status', { id: id ?? null }),
+  start: (id: string) => invoke('service_start', { id }),
+  stop: (id: string, force?: boolean) => invoke('service_stop', { id, force: force ?? null }),
+  restart: (id: string) => invoke('service_restart', { id }),
+  open: (id: string) => invoke('service_open', { id }),
+  openInIde: (path: string, ide: string) => invoke('service_open_in_ide', { path, ide }),
+  detectIdes: () => invoke('service_detect_ides'),
+  tailLog: (id: string, lines?: number) => invoke('service_tail_log', { id, lines: lines ?? null }),
 }
 
 export function initDesktopBridge(): void {
@@ -264,6 +278,7 @@ export function initDesktopBridge(): void {
       if (key === 'activity') return activityApi
       if (key === 'httpServer') return httpServerApi
       if (key === 'ai') return aiApi
+      if (key === 'services') return servicesApi
       return stub[key]
     },
   })

@@ -27,8 +27,14 @@ pub struct HttpServerConfig {
     pub enabled: bool,
     pub port: u16,
     pub token: String,
+    #[serde(default = "default_require_auth")]
+    pub require_auth: bool,
     #[serde(default)]
     pub running: bool,
+}
+
+fn default_require_auth() -> bool {
+    true
 }
 
 impl Default for HttpServerConfig {
@@ -37,6 +43,7 @@ impl Default for HttpServerConfig {
             enabled: true,
             port: 14220,
             token: "eva-local-token".to_string(),
+            require_auth: true,
             running: false,
         }
     }
@@ -126,6 +133,7 @@ fn error_response(msg: &str, status_code: u16) -> Response<std::io::Cursor<Vec<u
 fn start_server_thread(
     port: u16,
     expected_token: Arc<Mutex<String>>,
+    require_auth: Arc<AtomicBool>,
     user_data_dir: PathBuf,
     shutdown: Arc<AtomicBool>,
 ) {
@@ -190,24 +198,28 @@ fn start_server_thread(
                 continue;
             }
 
-            // Bearer Token Authentication
-            let auth_header = request
-                .headers()
-                .iter()
-                .find(|h| h.field.as_str().to_string().eq_ignore_ascii_case("authorization"))
-                .map(|h| h.value.as_str().to_string());
-
-            let token = expected_token.lock().unwrap().clone();
-            let is_authorized = if token.is_empty() {
+            // Authentication check (can be disabled for local connection)
+            let is_authorized = if !require_auth.load(Ordering::Relaxed) {
                 true
-            } else if let Some(ref header_val) = auth_header {
-                if header_val.starts_with("Bearer ") {
-                    header_val.strip_prefix("Bearer ").unwrap().trim() == token.as_str()
+            } else {
+                let auth_header = request
+                    .headers()
+                    .iter()
+                    .find(|h| h.field.as_str().to_string().eq_ignore_ascii_case("authorization"))
+                    .map(|h| h.value.as_str().to_string());
+
+                let token = expected_token.lock().unwrap().clone();
+                if token.is_empty() {
+                    true
+                } else if let Some(ref header_val) = auth_header {
+                    if header_val.starts_with("Bearer ") {
+                        header_val.strip_prefix("Bearer ").unwrap().trim() == token.as_str()
+                    } else {
+                        false
+                    }
                 } else {
                     false
                 }
-            } else {
-                false
             };
 
             if !is_authorized {
@@ -431,12 +443,14 @@ pub fn init(app: &AppHandle) -> SharedHttpServerState {
 
     let shutdown_signal = Arc::new(AtomicBool::new(false));
     let token_arc = Arc::new(Mutex::new(config.token.clone()));
+    let require_auth_arc = Arc::new(AtomicBool::new(config.require_auth));
 
     if config.enabled {
         config.running = true;
         start_server_thread(
             config.port,
             Arc::clone(&token_arc),
+            Arc::clone(&require_auth_arc),
             user_data.clone(),
             Arc::clone(&shutdown_signal),
         );
@@ -450,11 +464,12 @@ pub fn init(app: &AppHandle) -> SharedHttpServerState {
     }))
 }
 
-pub fn start_standalone_server(port: u16, token: String) {
+pub fn start_standalone_server(port: u16, token: String, require_auth: bool) {
     let user_data = get_user_data_dir_fallback();
     let shutdown = Arc::new(AtomicBool::new(false));
     let token_arc = Arc::new(Mutex::new(token));
-    start_server_thread(port, token_arc, user_data, shutdown);
+    let require_auth_arc = Arc::new(AtomicBool::new(require_auth));
+    start_server_thread(port, token_arc, require_auth_arc, user_data, shutdown);
 }
 
 // ──────────────────────────────────────────────────
@@ -488,9 +503,11 @@ pub fn http_server_save_config(
     let new_shutdown = Arc::new(AtomicBool::new(false));
     if config.enabled {
         let token_arc = Arc::new(Mutex::new(config.token.clone()));
+        let require_auth_arc = Arc::new(AtomicBool::new(config.require_auth));
         start_server_thread(
             config.port,
             token_arc,
+            require_auth_arc,
             guard.user_data_dir.clone(),
             Arc::clone(&new_shutdown),
         );
@@ -517,7 +534,7 @@ pub struct TestConnectionResult {
 }
 
 #[tauri::command]
-pub async fn http_server_test_connection(port: u16, token: String) -> Result<TestConnectionResult, String> {
+pub async fn http_server_test_connection(port: u16, token: String, require_auth: Option<bool>) -> Result<TestConnectionResult, String> {
     let start = std::time::Instant::now();
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(3))
@@ -525,8 +542,12 @@ pub async fn http_server_test_connection(port: u16, token: String) -> Result<Tes
         .map_err(|e| e.to_string())?;
 
     let url = format!("http://127.0.0.1:{}/api/context", port);
-    let resp = client.get(&url)
-        .header("Authorization", format!("Bearer {}", token))
+    let mut req = client.get(&url);
+    if require_auth.unwrap_or(true) && !token.is_empty() {
+        req = req.header("Authorization", format!("Bearer {}", token));
+    }
+
+    let resp = req
         .send()
         .await
         .map_err(|e| format!("连接失败 (服务可能未启动或端口被占用): {}", e))?;

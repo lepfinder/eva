@@ -11,15 +11,16 @@ import {
   Clipboard,
   Timer,
   MonitorPlay,
-  Zap,
+  Server,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from '@/components/ui/tooltip'
 import { Separator } from '@/components/ui/separator'
 import logoImage from '@/assets/logo.png'
+import { version as appVersion } from '../../../package.json'
 
-export type NavItem = 'dashboard' | 'navigation' | 'toolbox' | 'automation' | 'vault' | 'clipboard' | 'timeauditor' | 'visualrecall' | 'settings'
+export type NavItem = 'dashboard' | 'navigation' | 'toolbox' | 'services' | 'vault' | 'clipboard' | 'timeauditor' | 'visualrecall' | 'settings'
 
 interface SidebarProps {
   activeNav: NavItem
@@ -37,7 +38,7 @@ const navGroups = [
     title: 'ACTION',
     items: [
       { id: 'navigation', labelKey: 'nav.navigation', icon: <Compass className="h-5 w-5" /> },
-      { id: 'automation', labelKey: 'nav.automation', icon: <Zap className="h-5 w-5" /> },
+      { id: 'services', labelKey: 'nav.services', icon: <Server className="h-5 w-5" /> },
       { id: 'toolbox', labelKey: 'nav.toolbox', icon: <Wrench className="h-5 w-5" /> }
     ]
   },
@@ -172,6 +173,11 @@ export function Sidebar({ activeNav, onNavChange }: SidebarProps): React.ReactEl
               >
                 <Settings className="h-5 w-5" />
                 {!collapsed && <span>{t('nav.settings')}</span>}
+                {!collapsed && (
+                  <span className="ml-auto text-[10px] font-mono font-normal text-muted-foreground/50">
+                    v{appVersion}
+                  </span>
+                )}
               </Button>
             </TooltipTrigger>
             {collapsed && (

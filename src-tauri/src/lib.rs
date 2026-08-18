@@ -9,6 +9,7 @@ pub mod navigation;
 pub mod settings;
 pub mod vault;
 pub mod visual_recall;
+pub mod service_manager;
 
 use tauri::{Manager, RunEvent, WindowEvent};
 
@@ -148,6 +149,16 @@ pub fn run() {
             visual_recall::visual_recall_get_storage_stats,
             visual_recall::visual_recall_cleanup,
             visual_recall::visual_recall_get_image_data,
+            // Local Services
+            service_manager::service_list,
+            service_manager::service_status,
+            service_manager::service_start,
+            service_manager::service_stop,
+            service_manager::service_restart,
+            service_manager::service_open,
+            service_manager::service_open_in_ide,
+            service_manager::service_detect_ides,
+            service_manager::service_tail_log,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

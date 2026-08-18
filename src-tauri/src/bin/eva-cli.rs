@@ -57,6 +57,10 @@ struct ServeArgs {
     /// Bearer token for authentication (default: eva-local-token)
     #[arg(short, long, default_value = "eva-local-token")]
     token: String,
+
+    /// Disable Bearer token authentication (allow open localhost access)
+    #[arg(long, default_value_t = false)]
+    no_auth: bool,
 }
 
 // ──────────────────────────────────────────────────
@@ -457,9 +461,13 @@ fn main() {
 
         Commands::Serve(serve) => {
             println!("Starting EVA Local HTTP REST API Server on http://127.0.0.1:{}", serve.port);
-            println!("Bearer Token: {}", serve.token);
+            if serve.no_auth {
+                println!("Authentication: Disabled (Open Localhost Access)");
+            } else {
+                println!("Bearer Token: {}", serve.token);
+            }
             println!("Health endpoint: http://127.0.0.1:{}/api/health", serve.port);
-            eva_lib::http_server::start_standalone_server(serve.port, serve.token);
+            eva_lib::http_server::start_standalone_server(serve.port, serve.token, !serve.no_auth);
             // Block main thread
             loop {
                 std::thread::sleep(std::time::Duration::from_secs(3600));
