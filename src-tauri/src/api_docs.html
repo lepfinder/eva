@@ -1,0 +1,1844 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>EVA Local Intelligence REST API 在线交互式文档</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    /* 浅色主题 */
+    :root, html[data-theme="light"] {
+      --bg: #f8fafc;
+      --bg-gradient: radial-gradient(circle at 50% 0%, #e2e8f0 0%, #f8fafc 85%);
+      --card-bg: #ffffff;
+      --card-border: #e2e8f0;
+      --card-border-hover: rgba(37, 99, 235, 0.4);
+      --card-shadow: 0 4px 16px rgba(15, 23, 42, 0.04);
+      --text: #0f172a;
+      --text-muted: #475569;
+      --text-sub: #64748b;
+      --header-bg: rgba(255, 255, 255, 0.88);
+      --sidebar-bg: rgba(248, 250, 252, 0.75);
+      --primary: #2563eb;
+      --primary-hover: #1d4ed8;
+      --get: #059669;
+      --get-bg: rgba(16, 185, 129, 0.1);
+      --get-border: rgba(16, 185, 129, 0.25);
+      --post: #4f46e5;
+      --post-bg: rgba(99, 102, 241, 0.1);
+      --post-border: rgba(99, 102, 241, 0.25);
+      --code-bg: #f1f5f9;
+      --code-text: #1e293b;
+      --schema-bg: #f8fafc;
+      --auth-banner-bg: rgba(37, 99, 235, 0.06);
+      --auth-banner-border: rgba(37, 99, 235, 0.2);
+      --menu-item-hover: rgba(0, 0, 0, 0.04);
+      --menu-item-active-bg: rgba(37, 99, 235, 0.1);
+      --menu-item-active-color: #2563eb;
+      --sidebar-w: 270px;
+    }
+
+    /* 深色主题 (默认) */
+    html[data-theme="dark"] {
+      --bg: #090d16;
+      --bg-gradient: radial-gradient(circle at 50% 0%, #1e293b 0%, #090d16 80%);
+      --card-bg: #111827;
+      --card-border: rgba(255, 255, 255, 0.08);
+      --card-border-hover: rgba(59, 130, 246, 0.35);
+      --card-shadow: 0 4px 20px rgba(0, 0, 0, 0.25);
+      --text: #f8fafc;
+      --text-muted: #94a3b8;
+      --text-sub: #64748b;
+      --header-bg: rgba(9, 13, 22, 0.85);
+      --sidebar-bg: rgba(11, 15, 25, 0.5);
+      --primary: #3b82f6;
+      --primary-hover: #2563eb;
+      --get: #10b981;
+      --get-bg: rgba(16, 185, 129, 0.12);
+      --get-border: rgba(16, 185, 129, 0.25);
+      --post: #6366f1;
+      --post-bg: rgba(99, 102, 241, 0.12);
+      --post-border: rgba(99, 102, 241, 0.25);
+      --code-bg: #060911;
+      --code-text: #cbd5e1;
+      --schema-bg: rgba(0, 0, 0, 0.4);
+      --auth-banner-bg: rgba(59, 130, 246, 0.06);
+      --auth-banner-border: rgba(59, 130, 246, 0.2);
+      --menu-item-hover: rgba(255, 255, 255, 0.05);
+      --menu-item-active-bg: rgba(59, 130, 246, 0.15);
+      --menu-item-active-color: #60a5fa;
+      --sidebar-w: 270px;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html { scroll-behavior: smooth; }
+    body {
+      font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg-gradient);
+      color: var(--text);
+      line-height: 1.6;
+      min-height: 100vh;
+      transition: background 0.2s, color 0.2s;
+    }
+
+    .lucide-icon {
+      display: inline-block;
+      width: 14px;
+      height: 14px;
+      stroke: currentColor;
+      stroke-width: 2;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      fill: none;
+      vertical-align: middle;
+    }
+
+    /* 顶部导航 */
+    header {
+      position: sticky;
+      top: 0;
+      z-index: 50;
+      background: var(--header-bg);
+      backdrop-filter: blur(16px);
+      border-bottom: 1px solid var(--card-border);
+      padding: 12px 28px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 16px;
+      transition: all 0.2s;
+    }
+
+    .brand h1 {
+      font-size: 19px;
+      font-weight: 800;
+      letter-spacing: -0.5px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      color: var(--text);
+    }
+
+    .brand-logo {
+      font-size: 20px;
+      filter: drop-shadow(0 0 8px rgba(59, 130, 246, 0.5));
+    }
+
+    .version-tag {
+      font-size: 11px;
+      font-family: 'JetBrains Mono', monospace;
+      padding: 2px 8px;
+      border-radius: 9999px;
+      background: rgba(37, 99, 235, 0.12);
+      color: var(--primary);
+      border: 1px solid rgba(37, 99, 235, 0.25);
+      font-weight: 700;
+    }
+
+    .header-actions {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    .server-badge {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      padding: 6px 12px;
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 12px;
+      box-shadow: var(--card-shadow);
+    }
+
+    .pulse {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #10b981;
+      box-shadow: 0 0 8px #10b981;
+      animation: pulseAnim 2s infinite;
+    }
+
+    @keyframes pulseAnim {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.4; transform: scale(0.8); }
+    }
+
+    .theme-toggle-btn, .token-btn {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      color: var(--text-muted);
+      padding: 6px 12px;
+      border-radius: 8px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      transition: all 0.2s;
+      box-shadow: var(--card-shadow);
+    }
+
+    .theme-toggle-btn:hover, .token-btn:hover {
+      color: var(--text);
+      border-color: var(--primary);
+    }
+
+    .copy-doc-btn {
+      background: var(--primary);
+      color: #ffffff;
+      border: none;
+      padding: 6px 14px;
+      border-radius: 8px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      transition: all 0.2s;
+    }
+
+    .copy-doc-btn:hover {
+      background: var(--primary-hover);
+      box-shadow: 0 0 14px rgba(37, 99, 235, 0.35);
+    }
+
+    /* 主体左右两列布局 */
+    .layout {
+      max-width: 1360px;
+      margin: 0 auto;
+      display: flex;
+      min-height: calc(100vh - 65px);
+    }
+
+    /* 左侧目录侧边栏 */
+    aside.sidebar {
+      width: var(--sidebar-w);
+      flex-shrink: 0;
+      position: sticky;
+      top: 65px;
+      height: calc(100vh - 65px);
+      overflow-y: auto;
+      border-right: 1px solid var(--card-border);
+      padding: 24px 16px;
+      background: var(--sidebar-bg);
+      backdrop-filter: blur(12px);
+      transition: all 0.2s;
+    }
+
+    .search-filter {
+      margin-bottom: 20px;
+      position: relative;
+    }
+
+    .search-filter input {
+      width: 100%;
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      color: var(--text);
+      font-size: 12px;
+      padding: 8px 12px 8px 30px;
+      border-radius: 8px;
+      outline: none;
+      transition: all 0.15s;
+    }
+
+    .search-filter input:focus {
+      border-color: var(--primary);
+    }
+
+    .search-icon-inside {
+      position: absolute;
+      left: 10px;
+      top: 50%;
+      transform: translateY(-50%);
+      color: var(--text-sub);
+      pointer-events: none;
+    }
+
+    .menu-group {
+      margin-bottom: 20px;
+    }
+
+    .menu-title {
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--text-sub);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      margin-bottom: 8px;
+      padding-left: 8px;
+    }
+
+    .menu-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 7px 10px;
+      border-radius: 8px;
+      color: var(--text-muted);
+      text-decoration: none;
+      font-size: 12px;
+      font-weight: 500;
+      transition: all 0.15s;
+      margin-bottom: 2px;
+    }
+
+    .menu-item:hover {
+      background: var(--menu-item-hover);
+      color: var(--text);
+    }
+
+    .menu-item.active {
+      background: var(--menu-item-active-bg);
+      color: var(--menu-item-active-color);
+      font-weight: 600;
+    }
+
+    .badge-mini {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 9px;
+      font-weight: 700;
+      padding: 1px 5px;
+      border-radius: 4px;
+      flex-shrink: 0;
+    }
+
+    .badge-mini.method-get {
+      background: var(--get-bg);
+      color: var(--get);
+      border: 1px solid var(--get-border);
+    }
+
+    .badge-mini.method-post {
+      background: var(--post-bg);
+      color: var(--post);
+      border: 1px solid var(--post-border);
+    }
+
+    /* 右侧主要内容区域 */
+    main.content {
+      flex: 1;
+      padding: 32px 40px;
+      max-width: calc(1360px - var(--sidebar-w));
+      overflow-x: hidden;
+    }
+
+    /* 鉴权与指引 Banner */
+    .auth-banner {
+      background: var(--auth-banner-bg);
+      border: 1px solid var(--auth-banner-border);
+      border-radius: 14px;
+      padding: 18px 22px;
+      margin-bottom: 32px;
+      display: flex;
+      gap: 16px;
+      align-items: flex-start;
+    }
+
+    .auth-icon-wrap {
+      background: rgba(37, 99, 235, 0.15);
+      color: var(--primary);
+      padding: 10px;
+      border-radius: 10px;
+      flex-shrink: 0;
+    }
+
+    .auth-banner h3 {
+      font-size: 14px;
+      font-weight: 700;
+      margin-bottom: 4px;
+      color: var(--primary);
+    }
+
+    .auth-banner p {
+      font-size: 13px;
+      color: var(--text-muted);
+      line-height: 1.6;
+    }
+
+    .token-bar {
+      margin-top: 10px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    .token-bar input {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      color: var(--text);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 12px;
+      padding: 6px 12px;
+      border-radius: 6px;
+      outline: none;
+      width: 240px;
+    }
+
+    .token-bar input:focus {
+      border-color: var(--primary);
+    }
+
+    /* 接口卡片 */
+    .endpoint-card {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 16px;
+      padding: 24px;
+      margin-bottom: 30px;
+      box-shadow: var(--card-shadow);
+      transition: border-color 0.2s, box-shadow 0.2s;
+    }
+
+    .endpoint-card:hover {
+      border-color: var(--card-border-hover);
+    }
+
+    .endpoint-header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 12px;
+      flex-wrap: wrap;
+    }
+
+    .method-badge {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 12px;
+      font-weight: 800;
+      padding: 3px 10px;
+      border-radius: 6px;
+      letter-spacing: 0.5px;
+    }
+
+    .method-get {
+      background: var(--get-bg);
+      color: var(--get);
+      border: 1px solid var(--get-border);
+    }
+
+    .method-post {
+      background: var(--post-bg);
+      color: var(--post);
+      border: 1px solid var(--post-border);
+    }
+
+    .endpoint-path {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 16px;
+      font-weight: 700;
+      color: var(--text);
+    }
+
+    .endpoint-title {
+      font-size: 13px;
+      color: var(--text-sub);
+      font-weight: 600;
+      margin-left: auto;
+    }
+
+    .endpoint-desc {
+      font-size: 13px;
+      color: var(--text-muted);
+      margin-bottom: 18px;
+      line-height: 1.6;
+    }
+
+    /* 参数表格 */
+    .section-subtitle {
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--text-sub);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 8px;
+    }
+
+    .param-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-bottom: 18px;
+      font-size: 12px;
+    }
+
+    .param-table th {
+      text-align: left;
+      padding: 8px 12px;
+      background: var(--schema-bg);
+      color: var(--text-sub);
+      font-weight: 600;
+      border-bottom: 1px solid var(--card-border);
+    }
+
+    .param-table td {
+      padding: 9px 12px;
+      border-bottom: 1px solid var(--card-border);
+      color: var(--text);
+    }
+
+    .param-name {
+      font-family: 'JetBrains Mono', monospace;
+      font-weight: 600;
+      color: var(--primary);
+    }
+
+    .param-type {
+      font-family: 'JetBrains Mono', monospace;
+      color: var(--text-sub);
+      font-size: 11px;
+    }
+
+    .param-req {
+      color: #ef4444;
+      font-weight: 600;
+      font-size: 11px;
+    }
+
+    .param-opt {
+      color: var(--text-sub);
+      font-size: 11px;
+    }
+
+    /* 调试控制台与代码区域 */
+    .console-box {
+      background: var(--code-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 12px;
+      padding: 16px;
+      margin-top: 14px;
+    }
+
+    .console-form {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      margin-bottom: 12px;
+      flex-wrap: wrap;
+    }
+
+    .console-input {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      color: var(--text);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 12px;
+      padding: 7px 12px;
+      border-radius: 6px;
+      outline: none;
+      min-width: 140px;
+    }
+
+    .console-input:focus {
+      border-color: var(--primary);
+    }
+
+    .btn-run {
+      background: var(--primary);
+      color: #fff;
+      border: none;
+      padding: 7px 16px;
+      border-radius: 6px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      transition: all 0.15s;
+    }
+
+    .btn-run:hover {
+      background: var(--primary-hover);
+    }
+
+    .curl-snippet {
+      position: relative;
+      background: var(--schema-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 8px;
+      padding: 10px 14px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 12px;
+      color: var(--code-text);
+      overflow-x: auto;
+      margin-bottom: 12px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .btn-copy-mini {
+      background: transparent;
+      border: none;
+      color: var(--text-sub);
+      cursor: pointer;
+      padding: 4px;
+      border-radius: 4px;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 11px;
+      transition: color 0.15s;
+    }
+
+    .btn-copy-mini:hover {
+      color: var(--text);
+    }
+
+    /* 响应区域 */
+    .response-container {
+      background: var(--code-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 10px;
+      overflow: hidden;
+      display: none;
+    }
+
+    .response-header {
+      padding: 8px 14px;
+      background: rgba(0, 0, 0, 0.03);
+      border-bottom: 1px solid var(--card-border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 11px;
+    }
+
+    .status-ok { color: #059669; font-weight: 700; font-family: 'JetBrains Mono', monospace; }
+    .status-err { color: #dc2626; font-weight: 700; font-family: 'JetBrains Mono', monospace; }
+    .latency { font-family: 'JetBrains Mono', monospace; color: var(--text-sub); }
+
+    .response-body {
+      padding: 14px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 12px;
+      color: var(--code-text);
+      max-height: 280px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+  </style>
+</head>
+<body>
+  <!-- 顶部导航 -->
+  <header>
+    <div class="brand">
+      <span class="brand-logo">✨</span>
+      <h1>EVA REST API <span class="version-tag">v0.1.1</span></h1>
+    </div>
+    <div class="header-actions">
+      <div class="server-badge">
+        <div class="pulse"></div>
+        <span style="font-family: 'JetBrains Mono'; font-weight: 600; color: var(--primary);" id="serverBadge">http://127.0.0.1:14220</span>
+      </div>
+
+      <!-- 主题切换按钮 -->
+      <button class="theme-toggle-btn" onclick="toggleTheme()" id="themeToggleBtn">
+        <span id="themeIconContainer">
+          <svg class="lucide-icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/></svg>
+        </span>
+        <span id="themeLabel">深色</span>
+      </button>
+
+      <!-- 复制文档按钮 -->
+      <button class="copy-doc-btn" onclick="copyMarkdownDoc()" id="copyDocBtn">
+        <svg class="lucide-icon" viewBox="0 0 24 24"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
+        <span>复制 Markdown 文档</span>
+      </button>
+    </div>
+  </header>
+
+  <!-- 两列主体布局 -->
+  <div class="layout">
+    <!-- 左侧目录菜单导航 -->
+    <aside class="sidebar">
+      <div class="search-filter">
+        <span class="search-icon-inside">
+          <svg class="lucide-icon" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+        </span>
+        <input type="text" id="menuFilter" placeholder="搜索接口路径..." oninput="filterMenuItems()">
+      </div>
+
+      <div class="menu-group">
+        <div class="menu-title">系统与健康</div>
+        <a href="#endpoint-health" class="menu-item active" data-path="/health">
+          <span class="badge-mini method-get">GET</span>
+          <span>/api/health</span>
+        </a>
+      </div>
+
+      <div class="menu-group">
+        <div class="menu-title">桌面全维上下文</div>
+        <a href="#endpoint-context" class="menu-item" data-path="/api/context">
+          <span class="badge-mini method-get">GET</span>
+          <span>/api/context</span>
+        </a>
+        <a href="#endpoint-activity-current" class="menu-item" data-path="/api/activity/current">
+          <span class="badge-mini method-get">GET</span>
+          <span>/api/activity/current</span>
+        </a>
+      </div>
+
+      <div class="menu-group">
+        <div class="menu-title">生产力与活动审计</div>
+        <a href="#endpoint-activity-today" class="menu-item" data-path="/api/activity/today">
+          <span class="badge-mini method-get">GET</span>
+          <span>/api/activity/today</span>
+        </a>
+        <a href="#endpoint-activity-logs" class="menu-item" data-path="/api/activity/logs">
+          <span class="badge-mini method-get">GET</span>
+          <span>/api/activity/logs</span>
+        </a>
+      </div>
+
+      <div class="menu-group">
+        <div class="menu-title">智能剪贴板</div>
+        <a href="#endpoint-clipboard-latest" class="menu-item" data-path="/api/clipboard/latest">
+          <span class="badge-mini method-get">GET</span>
+          <span>/api/clipboard/latest</span>
+        </a>
+        <a href="#endpoint-clipboard-list" class="menu-item" data-path="/api/clipboard/list">
+          <span class="badge-mini method-get">GET</span>
+          <span>/api/clipboard/list</span>
+        </a>
+        <a href="#endpoint-clipboard-search" class="menu-item" data-path="/api/clipboard/search">
+          <span class="badge-mini method-get">GET</span>
+          <span>/api/clipboard/search</span>
+        </a>
+      </div>
+
+      <div class="menu-group">
+        <div class="menu-title">开发环境与端口</div>
+        <a href="#endpoint-env" class="menu-item" data-path="/api/env">
+          <span class="badge-mini method-get">GET</span>
+          <span>/api/env</span>
+        </a>
+        <a href="#endpoint-ports" class="menu-item" data-path="/api/ports">
+          <span class="badge-mini method-get">GET</span>
+          <span>/api/ports</span>
+        </a>
+        <a href="#endpoint-ports-kill" class="menu-item" data-path="/api/ports/kill">
+          <span class="badge-mini method-post">POST</span>
+          <span>/api/ports/kill</span>
+        </a>
+      </div>
+
+      <div class="menu-group">
+        <div class="menu-title">系统资源与视觉回溯</div>
+        <a href="#endpoint-memory" class="menu-item" data-path="/api/memory">
+          <span class="badge-mini method-get">GET</span>
+          <span>/api/memory</span>
+        </a>
+        <a href="#endpoint-recall" class="menu-item" data-path="/api/recall">
+          <span class="badge-mini method-get">GET</span>
+          <span>/api/recall</span>
+        </a>
+      </div>
+    </aside>
+
+    <!-- 右侧接口详情主体 -->
+    <main class="content">
+      <!-- 鉴权说明 Banner -->
+      <div class="auth-banner">
+        <div class="auth-icon-wrap">
+          <svg class="lucide-icon" style="width: 20px; height: 20px;" viewBox="0 0 24 24"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+        </div>
+        <div style="flex: 1;">
+          <h3>服务鉴权与在线联调配置 (Authentication)</h3>
+          <p>
+            EVA 本地 REST API 默认严格绑定在本机回环网卡（<code>127.0.0.1</code>）。若在设置中启用了 <strong>Token 身份校验</strong>，外部 Agent 调用及本页面在线调试时会自动携带 <code>Authorization: Bearer &lt;token&gt;</code> 请求头；若处于<strong>免 Token 模式</strong>，无需填写 Token 即可直接请求。
+          </p>
+          <div class="token-bar">
+            <label style="font-size: 12px; font-weight: 600; color: var(--text-sub);">联调 Bearer Token：</label>
+            <input type="text" id="globalAuthToken" placeholder="输入 Token（免密模式可留空）" oninput="updateGlobalToken()">
+            <span style="font-size: 11px; color: var(--text-sub);">（修改后将自动注入下方所有 cURL 及调试请求）</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- 1. 服务健康检查 -->
+      <section class="endpoint-card" id="endpoint-health">
+        <div class="endpoint-header">
+          <span class="method-badge method-get">GET</span>
+          <span class="endpoint-path">/api/health</span>
+          <span class="endpoint-title">服务健康检查 (Health Check)</span>
+        </div>
+        <p class="endpoint-desc">探测 EVA 嵌入式 HTTP 服务健康状态、当前版本及运行模式（兼容 <code>/health</code> 路径）。</p>
+        
+        <div class="console-box">
+          <div class="curl-snippet">
+            <code id="curl-health">curl http://127.0.0.1:14220/api/health</code>
+            <button class="btn-copy-mini" onclick="copySnippet('curl-health')">
+              <svg class="lucide-icon" viewBox="0 0 24 24"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
+              复制
+            </button>
+          </div>
+          <div class="console-form">
+            <button class="btn-run" onclick="testHealth()">
+              <svg class="lucide-icon" viewBox="0 0 24 24"><polygon points="6 3 20 12 6 21 6 3"/></svg>
+              发送请求
+            </button>
+          </div>
+          <div class="response-container" id="res-health">
+            <div class="response-header">
+              <span class="status-ok" id="status-health">200 OK</span>
+              <span class="latency" id="latency-health">-- ms</span>
+            </div>
+            <pre class="response-body" id="body-health"></pre>
+          </div>
+        </div>
+      </section>
+
+      <!-- 2. 全量桌面上下文快照 -->
+      <section class="endpoint-card" id="endpoint-context">
+        <div class="endpoint-header">
+          <span class="method-badge method-get">GET</span>
+          <span class="endpoint-path">/api/context</span>
+          <span class="endpoint-title">全量桌面上下文快照 (Context Snapshot)</span>
+        </div>
+        <p class="endpoint-desc">一键聚合当前活跃窗口、今日生产力时长与热门 App、最新剪贴板内容、系统监听端口等全维度上下文，专为 AI Agent 桌面感知设计。</p>
+        
+        <div class="console-box">
+          <div class="curl-snippet">
+            <code id="curl-context">curl http://127.0.0.1:14220/api/context</code>
+            <button class="btn-copy-mini" onclick="copySnippet('curl-context')">
+              <svg class="lucide-icon" viewBox="0 0 24 24"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
+              复制
+            </button>
+          </div>
+          <div class="console-form">
+            <button class="btn-run" onclick="testContext()">
+              <svg class="lucide-icon" viewBox="0 0 24 24"><polygon points="6 3 20 12 6 21 6 3"/></svg>
+              发送请求
+            </button>
+          </div>
+          <div class="response-container" id="res-context">
+            <div class="response-header">
+              <span class="status-ok" id="status-context">200 OK</span>
+              <span class="latency" id="latency-context">-- ms</span>
+            </div>
+            <pre class="response-body" id="body-context"></pre>
+          </div>
+        </div>
+      </section>
+
+      <!-- 3. 当前聚焦活跃窗口 -->
+      <section class="endpoint-card" id="endpoint-activity-current">
+        <div class="endpoint-header">
+          <span class="method-badge method-get">GET</span>
+          <span class="endpoint-path">/api/activity/current</span>
+          <span class="endpoint-title">当前聚焦活跃窗口 (Active Window)</span>
+        </div>
+        <p class="endpoint-desc">轻量查询用户此时此刻聚焦的前台应用名称、窗口标题及自动解析的所属项目/代码仓库名称。</p>
+        
+        <div class="console-box">
+          <div class="curl-snippet">
+            <code id="curl-act-cur">curl http://127.0.0.1:14220/api/activity/current</code>
+            <button class="btn-copy-mini" onclick="copySnippet('curl-act-cur')">
+              <svg class="lucide-icon" viewBox="0 0 24 24"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
+              复制
+            </button>
+          </div>
+          <div class="console-form">
+            <button class="btn-run" onclick="testActCurrent()">
+              <svg class="lucide-icon" viewBox="0 0 24 24"><polygon points="6 3 20 12 6 21 6 3"/></svg>
+              发送请求
+            </button>
+          </div>
+          <div class="response-container" id="res-act-cur">
+            <div class="response-header">
+              <span class="status-ok" id="status-act-cur">200 OK</span>
+              <span class="latency" id="latency-act-cur">-- ms</span>
+            </div>
+            <pre class="response-body" id="body-act-cur"></pre>
+          </div>
+        </div>
+      </section>
+
+      <!-- 4. 今日生产力统计 -->
+      <section class="endpoint-card" id="endpoint-activity-today">
+        <div class="endpoint-header">
+          <span class="method-badge method-get">GET</span>
+          <span class="endpoint-path">/api/activity/today</span>
+          <span class="endpoint-title">生产力时长与分类统计 (Productivity Stats)</span>
+        </div>
+        <p class="endpoint-desc">获取指定日期或当天的总专注时长、应用时长排行榜、类别分类（开发、写作、社交等）以及具体项目耗时分布。</p>
+        
+        <div class="section-subtitle">查询参数 (Query Parameters)</div>
+        <table class="param-table">
+          <thead>
+            <tr><th>参数名</th><th>类型</th><th>必填</th><th>说明</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><span class="param-name">date</span></td>
+              <td><span class="param-type">string</span></td>
+              <td><span class="param-opt">可选</span></td>
+              <td>查询日期 (格式 <code>YYYY-MM-DD</code>，默认为当天)</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div class="console-box">
+          <div class="curl-snippet">
+            <code id="curl-act-today">curl http://127.0.0.1:14220/api/activity/today</code>
+            <button class="btn-copy-mini" onclick="copySnippet('curl-act-today')">
+              <svg class="lucide-icon" viewBox="0 0 24 24"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
+              复制
+            </button>
+          </div>
+          <div class="console-form">
+            <input type="text" class="console-input" id="param-act-today-date" placeholder="date (YYYY-MM-DD)" oninput="updateActTodayCurl()">
+            <button class="btn-run" onclick="testActToday()">
+              <svg class="lucide-icon" viewBox="0 0 24 24"><polygon points="6 3 20 12 6 21 6 3"/></svg>
+              发送请求
+            </button>
+          </div>
+          <div class="response-container" id="res-act-today">
+            <div class="response-header">
+              <span class="status-ok" id="status-act-today">200 OK</span>
+              <span class="latency" id="latency-act-today">-- ms</span>
+            </div>
+            <pre class="response-body" id="body-act-today"></pre>
+          </div>
+        </div>
+      </section>
+
+      <!-- 5. 桌面活动时间线日志 -->
+      <section class="endpoint-card" id="endpoint-activity-logs">
+        <div class="endpoint-header">
+          <span class="method-badge method-get">GET</span>
+          <span class="endpoint-path">/api/activity/logs</span>
+          <span class="endpoint-title">活动时间线日志 (Activity Logs)</span>
+        </div>
+        <p class="endpoint-desc">按时间线获取详细的窗口切换与操作明细日志，支持按指定应用名称过滤与限制返回条数。</p>
+        
+        <div class="section-subtitle">查询参数 (Query Parameters)</div>
+        <table class="param-table">
+          <thead>
+            <tr><th>参数名</th><th>类型</th><th>必填</th><th>说明</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><span class="param-name">date</span></td>
+              <td><span class="param-type">string</span></td>
+              <td><span class="param-opt">可选</span></td>
+              <td>查询日期 (格式 <code>YYYY-MM-DD</code>，默认为当天)</td>
+            </tr>
+            <tr>
+              <td><span class="param-name">limit</span></td>
+              <td><span class="param-type">number</span></td>
+              <td><span class="param-opt">可选</span></td>
+              <td>返回条数限制 (默认 50)</td>
+            </tr>
+            <tr>
+              <td><span class="param-name">app</span></td>
+              <td><span class="param-type">string</span></td>
+              <td><span class="param-opt">可选</span></td>
+              <td>按应用名筛选 (例如 <code>Cursor</code>, <code>Xcode</code>)</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div class="console-box">
+          <div class="curl-snippet">
+            <code id="curl-act-logs">curl http://127.0.0.1:14220/api/activity/logs?limit=5</code>
+            <button class="btn-copy-mini" onclick="copySnippet('curl-act-logs')">
+              <svg class="lucide-icon" viewBox="0 0 24 24"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
+              复制
+            </button>
+          </div>
+          <div class="console-form">
+            <input type="text" class="console-input" id="param-act-logs-limit" value="5" placeholder="limit (如 10)" oninput="updateActLogsCurl()">
+            <input type="text" class="console-input" id="param-act-logs-app" placeholder="app 过滤 (可选)" oninput="updateActLogsCurl()">
+            <button class="btn-run" onclick="testActLogs()">
+              <svg class="lucide-icon" viewBox="0 0 24 24"><polygon points="6 3 20 12 6 21 6 3"/></svg>
+              发送请求
+            </button>
+          </div>
+          <div class="response-container" id="res-act-logs">
+            <div class="response-header">
+              <span class="status-ok" id="status-act-logs">200 OK</span>
+              <span class="latency" id="latency-act-logs">-- ms</span>
+            </div>
+            <pre class="response-body" id="body-act-logs"></pre>
+          </div>
+        </div>
+      </section>
+
+      <!-- 6. 最新剪贴板 -->
+      <section class="endpoint-card" id="endpoint-clipboard-latest">
+        <div class="endpoint-header">
+          <span class="method-badge method-get">GET</span>
+          <span class="endpoint-path">/api/clipboard/latest</span>
+          <span class="endpoint-title">最新剪贴板文本与历史 (Latest Clipboard)</span>
+        </div>
+        <p class="endpoint-desc">读取系统当前实时剪贴板文本 (liveText) 以及 SQLite 数据库沉淀的最新一条历史记录对象。</p>
+        
+        <div class="console-box">
+          <div class="curl-snippet">
+            <code id="curl-clip-latest">curl http://127.0.0.1:14220/api/clipboard/latest</code>
+            <button class="btn-copy-mini" onclick="copySnippet('curl-clip-latest')">
+              <svg class="lucide-icon" viewBox="0 0 24 24"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
+              复制
+            </button>
+          </div>
+          <div class="console-form">
+            <button class="btn-run" onclick="testClipLatest()">
+              <svg class="lucide-icon" viewBox="0 0 24 24"><polygon points="6 3 20 12 6 21 6 3"/></svg>
+              发送请求
+            </button>
+          </div>
+          <div class="response-container" id="res-clip-latest">
+            <div class="response-header">
+              <span class="status-ok" id="status-clip-latest">200 OK</span>
+              <span class="latency" id="latency-clip-latest">-- ms</span>
+            </div>
+            <pre class="response-body" id="body-clip-latest"></pre>
+          </div>
+        </div>
+      </section>
+
+      <!-- 7. 剪贴板历史列表 -->
+      <section class="endpoint-card" id="endpoint-clipboard-list">
+        <div class="endpoint-header">
+          <span class="method-badge method-get">GET</span>
+          <span class="endpoint-path">/api/clipboard/list</span>
+          <span class="endpoint-title">剪贴板历史列表 (Clipboard List)</span>
+        </div>
+        <p class="endpoint-desc">分页拉取系统剪贴板历史记录，支持 <code>limit</code>, <code>offset</code> 以及日期筛选。</p>
+        
+        <div class="section-subtitle">查询参数 (Query Parameters)</div>
+        <table class="param-table">
+          <thead>
+            <tr><th>参数名</th><th>类型</th><th>必填</th><th>说明</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><span class="param-name">limit</span></td>
+              <td><span class="param-type">number</span></td>
+              <td><span class="param-opt">可选</span></td>
+              <td>每页条数 (默认 20)</td>
+            </tr>
+            <tr>
+              <td><span class="param-name">offset</span></td>
+              <td><span class="param-type">number</span></td>
+              <td><span class="param-opt">可选</span></td>
+              <td>偏移量 (默认 0)</td>
+            </tr>
+            <tr>
+              <td><span class="param-name">date</span></td>
+              <td><span class="param-type">string</span></td>
+              <td><span class="param-opt">可选</span></td>
+              <td>指定日期 (格式 <code>YYYY-MM-DD</code>)</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div class="console-box">
+          <div class="curl-snippet">
+            <code id="curl-clip-list">curl "http://127.0.0.1:14220/api/clipboard/list?limit=5"</code>
+            <button class="btn-copy-mini" onclick="copySnippet('curl-clip-list')">
+              <svg class="lucide-icon" viewBox="0 0 24 24"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
+              复制
+            </button>
+          </div>
+          <div class="console-form">
+            <input type="text" class="console-input" id="param-clip-list-limit" value="5" placeholder="limit" oninput="updateClipListCurl()">
+            <button class="btn-run" onclick="testClipList()">
+              <svg class="lucide-icon" viewBox="0 0 24 24"><polygon points="6 3 20 12 6 21 6 3"/></svg>
+              发送请求
+            </button>
+          </div>
+          <div class="response-container" id="res-clip-list">
+            <div class="response-header">
+              <span class="status-ok" id="status-clip-list">200 OK</span>
+              <span class="latency" id="latency-clip-list">-- ms</span>
+            </div>
+            <pre class="response-body" id="body-clip-list"></pre>
+          </div>
+        </div>
+      </section>
+
+      <!-- 8. 搜索剪贴板历史 -->
+      <section class="endpoint-card" id="endpoint-clipboard-search">
+        <div class="endpoint-header">
+          <span class="method-badge method-get">GET</span>
+          <span class="endpoint-path">/api/clipboard/search</span>
+          <span class="endpoint-title">搜索剪贴板历史 (Search Clipboard)</span>
+        </div>
+        <p class="endpoint-desc">根据关键词模糊搜索剪贴板历史记录中的纯文本或代码片段。</p>
+        
+        <div class="section-subtitle">查询参数 (Query Parameters)</div>
+        <table class="param-table">
+          <thead>
+            <tr><th>参数名</th><th>类型</th><th>必填</th><th>说明</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><span class="param-name">q</span></td>
+              <td><span class="param-type">string</span></td>
+              <td><span class="param-req">必填</span></td>
+              <td>检索关键词</td>
+            </tr>
+            <tr>
+              <td><span class="param-name">limit</span></td>
+              <td><span class="param-type">number</span></td>
+              <td><span class="param-opt">可选</span></td>
+              <td>返回条数限制 (默认 20)</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div class="console-box">
+          <div class="curl-snippet">
+            <code id="curl-clip-search">curl "http://127.0.0.1:14220/api/clipboard/search?q=eva"</code>
+            <button class="btn-copy-mini" onclick="copySnippet('curl-clip-search')">
+              <svg class="lucide-icon" viewBox="0 0 24 24"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
+              复制
+            </button>
+          </div>
+          <div class="console-form">
+            <input type="text" class="console-input" id="param-clip-search-q" value="eva" placeholder="搜索关键词..." oninput="updateClipSearchCurl()">
+            <button class="btn-run" onclick="testClipSearch()">
+              <svg class="lucide-icon" viewBox="0 0 24 24"><polygon points="6 3 20 12 6 21 6 3"/></svg>
+              发送请求
+            </button>
+          </div>
+          <div class="response-container" id="res-clip-search">
+            <div class="response-header">
+              <span class="status-ok" id="status-clip-search">200 OK</span>
+              <span class="latency" id="latency-clip-search">-- ms</span>
+            </div>
+            <pre class="response-body" id="body-clip-search"></pre>
+          </div>
+        </div>
+      </section>
+
+      <!-- 9. 开发环境检测 -->
+      <section class="endpoint-card" id="endpoint-env">
+        <div class="endpoint-header">
+          <span class="method-badge method-get">GET</span>
+          <span class="endpoint-path">/api/env</span>
+          <span class="endpoint-title">开发环境与工具检测 (Env Detector)</span>
+        </div>
+        <p class="endpoint-desc">全面探测本机已安装的编程语言运行环境（Node.js, Rust, Python, Go, Java）、AI CLI（Ollama, OpenClaw, Hermes）、包管理器与容器工具版本与路径。</p>
+        
+        <div class="console-box">
+          <div class="curl-snippet">
+            <code id="curl-env">curl http://127.0.0.1:14220/api/env</code>
+            <button class="btn-copy-mini" onclick="copySnippet('curl-env')">
+              <svg class="lucide-icon" viewBox="0 0 24 24"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
+              复制
+            </button>
+          </div>
+          <div class="console-form">
+            <button class="btn-run" onclick="testEnv()">
+              <svg class="lucide-icon" viewBox="0 0 24 24"><polygon points="6 3 20 12 6 21 6 3"/></svg>
+              发送请求
+            </button>
+          </div>
+          <div class="response-container" id="res-env">
+            <div class="response-header">
+              <span class="status-ok" id="status-env">200 OK</span>
+              <span class="latency" id="latency-env">-- ms</span>
+            </div>
+            <pre class="response-body" id="body-env"></pre>
+          </div>
+        </div>
+      </section>
+
+      <!-- 10. 监听端口列表 -->
+      <section class="endpoint-card" id="endpoint-ports">
+        <div class="endpoint-header">
+          <span class="method-badge method-get">GET</span>
+          <span class="endpoint-path">/api/ports</span>
+          <span class="endpoint-title">监听开发端口列表 (Listening Ports)</span>
+        </div>
+        <p class="endpoint-desc">枚举本机正在被监听的 TCP 端口列表（含 PID、进程名、监听地址与占用程序路径）。</p>
+        
+        <div class="console-box">
+          <div class="curl-snippet">
+            <code id="curl-ports">curl http://127.0.0.1:14220/api/ports</code>
+            <button class="btn-copy-mini" onclick="copySnippet('curl-ports')">
+              <svg class="lucide-icon" viewBox="0 0 24 24"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
+              复制
+            </button>
+          </div>
+          <div class="console-form">
+            <button class="btn-run" onclick="testPorts()">
+              <svg class="lucide-icon" viewBox="0 0 24 24"><polygon points="6 3 20 12 6 21 6 3"/></svg>
+              发送请求
+            </button>
+          </div>
+          <div class="response-container" id="res-ports">
+            <div class="response-header">
+              <span class="status-ok" id="status-ports">200 OK</span>
+              <span class="latency" id="latency-ports">-- ms</span>
+            </div>
+            <pre class="response-body" id="body-ports"></pre>
+          </div>
+        </div>
+      </section>
+
+      <!-- 11. 终止进程 -->
+      <section class="endpoint-card" id="endpoint-ports-kill">
+        <div class="endpoint-header">
+          <span class="method-badge method-post">POST</span>
+          <span class="endpoint-path">/api/ports/kill</span>
+          <span class="endpoint-title">按 PID 终止进程 (Kill Process)</span>
+        </div>
+        <p class="endpoint-desc">根据进程 PID 安全终止占用端口或僵死进程。</p>
+        
+        <div class="section-subtitle">请求体格式 (JSON Body)</div>
+        <table class="param-table">
+          <thead>
+            <tr><th>字段名</th><th>类型</th><th>必填</th><th>说明</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><span class="param-name">pid</span></td>
+              <td><span class="param-type">number</span></td>
+              <td><span class="param-req">必填</span></td>
+              <td>目标进程 PID (如 <code>80801</code>)</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div class="console-box">
+          <div class="curl-snippet">
+            <code id="curl-ports-kill">curl -X POST http://127.0.0.1:14220/api/ports/kill -H "Content-Type: application/json" -d '{"pid":99999}'</code>
+            <button class="btn-copy-mini" onclick="copySnippet('curl-ports-kill')">
+              <svg class="lucide-icon" viewBox="0 0 24 24"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
+              复制
+            </button>
+          </div>
+          <div class="console-form">
+            <input type="number" class="console-input" id="param-ports-kill-pid" value="99999" placeholder="目标 PID..." oninput="updatePortsKillCurl()">
+            <button class="btn-run" onclick="testPortsKill()">
+              <svg class="lucide-icon" viewBox="0 0 24 24"><polygon points="6 3 20 12 6 21 6 3"/></svg>
+              执行终止
+            </button>
+          </div>
+          <div class="response-container" id="res-ports-kill">
+            <div class="response-header">
+              <span class="status-ok" id="status-ports-kill">200 OK</span>
+              <span class="latency" id="latency-ports-kill">-- ms</span>
+            </div>
+            <pre class="response-body" id="body-ports-kill"></pre>
+          </div>
+        </div>
+      </section>
+
+      <!-- 12. 系统内存分析 -->
+      <section class="endpoint-card" id="endpoint-memory">
+        <div class="endpoint-header">
+          <span class="method-badge method-get">GET</span>
+          <span class="endpoint-path">/api/memory</span>
+          <span class="endpoint-title">内存占用与分析 (Memory Analyzer)</span>
+        </div>
+        <p class="endpoint-desc">获取整机物理内存、已用/可用内存比例以及当前占用内存前 N 名的应用排行。</p>
+        
+        <div class="section-subtitle">查询参数 (Query Parameters)</div>
+        <table class="param-table">
+          <thead>
+            <tr><th>参数名</th><th>类型</th><th>必填</th><th>说明</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><span class="param-name">top</span></td>
+              <td><span class="param-type">number</span></td>
+              <td><span class="param-opt">可选</span></td>
+              <td>返回占用最高的应用数量 (默认 10)</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div class="console-box">
+          <div class="curl-snippet">
+            <code id="curl-memory">curl "http://127.0.0.1:14220/api/memory?top=5"</code>
+            <button class="btn-copy-mini" onclick="copySnippet('curl-memory')">
+              <svg class="lucide-icon" viewBox="0 0 24 24"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
+              复制
+            </button>
+          </div>
+          <div class="console-form">
+            <input type="number" class="console-input" id="param-memory-top" value="5" placeholder="top (如 5)" oninput="updateMemoryCurl()">
+            <button class="btn-run" onclick="testMemory()">
+              <svg class="lucide-icon" viewBox="0 0 24 24"><polygon points="6 3 20 12 6 21 6 3"/></svg>
+              发送请求
+            </button>
+          </div>
+          <div class="response-container" id="res-memory">
+            <div class="response-header">
+              <span class="status-ok" id="status-memory">200 OK</span>
+              <span class="latency" id="latency-memory">-- ms</span>
+            </div>
+            <pre class="response-body" id="body-memory"></pre>
+          </div>
+        </div>
+      </section>
+
+      <!-- 13. 视觉回溯历史 -->
+      <section class="endpoint-card" id="endpoint-recall">
+        <div class="endpoint-header">
+          <span class="method-badge method-get">GET</span>
+          <span class="endpoint-path">/api/recall</span>
+          <span class="endpoint-title">视觉回溯索引与快照 (Visual Recall)</span>
+        </div>
+        <p class="endpoint-desc">拉取近期桌面屏幕视觉快照的索引记录（包含时间戳、应用归属及关联事件）。</p>
+        
+        <div class="section-subtitle">查询参数 (Query Parameters)</div>
+        <table class="param-table">
+          <thead>
+            <tr><th>参数名</th><th>类型</th><th>必填</th><th>说明</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><span class="param-name">limit</span></td>
+              <td><span class="param-type">number</span></td>
+              <td><span class="param-opt">可选</span></td>
+              <td>返回快照条数限制 (默认 20)</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div class="console-box">
+          <div class="curl-snippet">
+            <code id="curl-recall">curl "http://127.0.0.1:14220/api/recall?limit=5"</code>
+            <button class="btn-copy-mini" onclick="copySnippet('curl-recall')">
+              <svg class="lucide-icon" viewBox="0 0 24 24"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
+              复制
+            </button>
+          </div>
+          <div class="console-form">
+            <input type="number" class="console-input" id="param-recall-limit" value="5" placeholder="limit (如 5)" oninput="updateRecallCurl()">
+            <button class="btn-run" onclick="testRecall()">
+              <svg class="lucide-icon" viewBox="0 0 24 24"><polygon points="6 3 20 12 6 21 6 3"/></svg>
+              发送请求
+            </button>
+          </div>
+          <div class="response-container" id="res-recall">
+            <div class="response-header">
+              <span class="status-ok" id="status-recall">200 OK</span>
+              <span class="latency" id="latency-recall">-- ms</span>
+            </div>
+            <pre class="response-body" id="body-recall"></pre>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    const COPY_SVG = `<svg class="lucide-icon" viewBox="0 0 24 24"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>`;
+    const CHECK_SVG = `<svg class="lucide-icon" viewBox="0 0 24 24" style="color: #10b981;"><polyline points="20 6 9 17 4 12"/></svg>`;
+    const SUN_SVG = `<svg class="lucide-icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/></svg>`;
+    const MOON_SVG = `<svg class="lucide-icon" viewBox="0 0 24 24"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg>`;
+
+    // 主题切换
+    function initTheme() {
+      const saved = localStorage.getItem('eva-docs-theme') || 'dark';
+      document.documentElement.setAttribute('data-theme', saved);
+      updateThemeButton(saved);
+    }
+
+    function toggleTheme() {
+      const current = document.documentElement.getAttribute('data-theme') || 'dark';
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('eva-docs-theme', next);
+      updateThemeButton(next);
+    }
+
+    function updateThemeButton(theme) {
+      const icon = document.getElementById('themeIconContainer');
+      const label = document.getElementById('themeLabel');
+      if (theme === 'dark') {
+        icon.innerHTML = SUN_SVG;
+        label.textContent = '深色';
+      } else {
+        icon.innerHTML = MOON_SVG;
+        label.textContent = '浅色';
+      }
+    }
+
+    // 复制文本辅助
+    function copySnippet(id) {
+      const el = document.getElementById(id);
+      if (!el) return;
+      navigator.clipboard.writeText(el.textContent.trim()).then(() => {
+        alertToast('cURL 命令已复制到剪贴板');
+      });
+    }
+
+    function alertToast(msg) {
+      const toast = document.createElement('div');
+      toast.textContent = msg;
+      toast.style.position = 'fixed';
+      toast.style.bottom = '24px';
+      toast.style.right = '24px';
+      toast.style.background = 'var(--card-bg)';
+      toast.style.color = 'var(--text)';
+      toast.style.border = '1px solid var(--primary)';
+      toast.style.boxShadow = '0 6px 20px rgba(0,0,0,0.2)';
+      toast.style.padding = '10px 18px';
+      toast.style.borderRadius = '8px';
+      toast.style.fontSize = '12px';
+      toast.style.fontWeight = '600';
+      toast.style.zIndex = '9999';
+      toast.style.transition = 'opacity 0.3s ease';
+      document.body.appendChild(toast);
+      setTimeout(() => {
+        toast.style.opacity = '0';
+        setTimeout(() => toast.remove(), 300);
+      }, 2000);
+    }
+
+    // 获取 Base URL
+    function getBaseUrl() {
+      const origin = window.location.origin;
+      if (origin && origin !== 'null' && !origin.startsWith('file:')) {
+        return origin;
+      }
+      return 'http://127.0.0.1:14220';
+    }
+
+    function getAuthToken() {
+      const input = document.getElementById('globalAuthToken');
+      return input ? input.value.trim() : '';
+    }
+
+    function updateGlobalToken() {
+      updateAllCurls();
+    }
+
+    function buildAuthHeader() {
+      const token = getAuthToken();
+      return token ? { 'Authorization': `Bearer ${token}` } : {};
+    }
+
+    function buildCurlHeader() {
+      const token = getAuthToken();
+      return token ? ` -H "Authorization: Bearer ${token}"` : '';
+    }
+
+    // 发送请求核心函数
+    async function executeApi(method, path, body, resContainerId) {
+      const container = document.getElementById(resContainerId);
+      const statusSpan = container.querySelector('.status-ok, .status-err');
+      const latencySpan = container.querySelector('.latency');
+      const bodyPre = container.querySelector('.response-body');
+
+      container.style.display = 'block';
+      statusSpan.textContent = '请求中...';
+      statusSpan.className = 'latency';
+      latencySpan.textContent = '';
+      bodyPre.textContent = '正在连接本地服务...';
+
+      const start = performance.now();
+      const baseUrl = getBaseUrl();
+      const url = `${baseUrl}${path}`;
+
+      try {
+        const headers = { ...buildAuthHeader() };
+        if (body && typeof body === 'object') {
+          headers['Content-Type'] = 'application/json';
+        }
+
+        const options = {
+          method,
+          headers,
+        };
+        if (body) {
+          options.body = typeof body === 'string' ? body : JSON.stringify(body);
+        }
+
+        const res = await fetch(url, options);
+        const duration = Math.round(performance.now() - start);
+        latencySpan.textContent = `${duration}ms`;
+
+        if (res.ok) {
+          statusSpan.textContent = `${res.status} ${res.statusText || 'OK'}`;
+          statusSpan.className = 'status-ok';
+        } else {
+          statusSpan.textContent = `${res.status} ${res.statusText || 'Error'}`;
+          statusSpan.className = 'status-err';
+        }
+
+        const contentType = res.headers.get('content-type') || '';
+        if (contentType.includes('application/json')) {
+          const data = await res.json();
+          bodyPre.textContent = JSON.stringify(data, null, 2);
+        } else {
+          const text = await res.text();
+          bodyPre.textContent = text;
+        }
+      } catch (err) {
+        const duration = Math.round(performance.now() - start);
+        latencySpan.textContent = `${duration}ms`;
+        statusSpan.textContent = 'Connection Failed';
+        statusSpan.className = 'status-err';
+        bodyPre.textContent = `连接失败: ${err.message}\n请确认本地 EVA 桌面端与 HTTP 服务正常运行。`;
+      }
+    }
+
+    // 接口测试方法
+    function testHealth() {
+      executeApi('GET', '/api/health', null, 'res-health');
+    }
+
+    function testContext() {
+      executeApi('GET', '/api/context', null, 'res-context');
+    }
+
+    function testActCurrent() {
+      executeApi('GET', '/api/activity/current', null, 'res-act-cur');
+    }
+
+    function updateActTodayCurl() {
+      const date = document.getElementById('param-act-today-date').value.trim();
+      const query = date ? `?date=${encodeURIComponent(date)}` : '';
+      document.getElementById('curl-act-today').textContent = `curl${buildCurlHeader()} http://127.0.0.1:14220/api/activity/today${query}`;
+    }
+
+    function testActToday() {
+      const date = document.getElementById('param-act-today-date').value.trim();
+      const query = date ? `?date=${encodeURIComponent(date)}` : '';
+      executeApi('GET', `/api/activity/today${query}`, null, 'res-act-today');
+    }
+
+    function updateActLogsCurl() {
+      const limit = document.getElementById('param-act-logs-limit').value.trim() || '5';
+      const app = document.getElementById('param-act-logs-app').value.trim();
+      let query = `?limit=${encodeURIComponent(limit)}`;
+      if (app) query += `&app=${encodeURIComponent(app)}`;
+      document.getElementById('curl-act-logs').textContent = `curl${buildCurlHeader()} "http://127.0.0.1:14220/api/activity/logs${query}"`;
+    }
+
+    function testActLogs() {
+      const limit = document.getElementById('param-act-logs-limit').value.trim() || '5';
+      const app = document.getElementById('param-act-logs-app').value.trim();
+      let query = `?limit=${encodeURIComponent(limit)}`;
+      if (app) query += `&app=${encodeURIComponent(app)}`;
+      executeApi('GET', `/api/activity/logs${query}`, null, 'res-act-logs');
+    }
+
+    function testClipLatest() {
+      executeApi('GET', '/api/clipboard/latest', null, 'res-clip-latest');
+    }
+
+    function updateClipListCurl() {
+      const limit = document.getElementById('param-clip-list-limit').value.trim() || '5';
+      document.getElementById('curl-clip-list').textContent = `curl${buildCurlHeader()} "http://127.0.0.1:14220/api/clipboard/list?limit=${limit}"`;
+    }
+
+    function testClipList() {
+      const limit = document.getElementById('param-clip-list-limit').value.trim() || '5';
+      executeApi('GET', `/api/clipboard/list?limit=${limit}`, null, 'res-clip-list');
+    }
+
+    function updateClipSearchCurl() {
+      const q = document.getElementById('param-clip-search-q').value.trim() || 'eva';
+      document.getElementById('curl-clip-search').textContent = `curl${buildCurlHeader()} "http://127.0.0.1:14220/api/clipboard/search?q=${encodeURIComponent(q)}"`;
+    }
+
+    function testClipSearch() {
+      const q = document.getElementById('param-clip-search-q').value.trim() || 'eva';
+      executeApi('GET', `/api/clipboard/search?q=${encodeURIComponent(q)}`, null, 'res-clip-search');
+    }
+
+    function testEnv() {
+      executeApi('GET', '/api/env', null, 'res-env');
+    }
+
+    function testPorts() {
+      executeApi('GET', '/api/ports', null, 'res-ports');
+    }
+
+    function updatePortsKillCurl() {
+      const pid = parseInt(document.getElementById('param-ports-kill-pid').value) || 99999;
+      document.getElementById('curl-ports-kill').textContent = `curl -X POST http://127.0.0.1:14220/api/ports/kill${buildCurlHeader()} -H "Content-Type: application/json" -d '{"pid":${pid}}'`;
+    }
+
+    function testPortsKill() {
+      const pid = parseInt(document.getElementById('param-ports-kill-pid').value) || 99999;
+      executeApi('POST', '/api/ports/kill', { pid }, 'res-ports-kill');
+    }
+
+    function updateMemoryCurl() {
+      const top = document.getElementById('param-memory-top').value.trim() || '5';
+      document.getElementById('curl-memory').textContent = `curl${buildCurlHeader()} "http://127.0.0.1:14220/api/memory?top=${top}"`;
+    }
+
+    function testMemory() {
+      const top = document.getElementById('param-memory-top').value.trim() || '5';
+      executeApi('GET', `/api/memory?top=${top}`, null, 'res-memory');
+    }
+
+    function updateRecallCurl() {
+      const limit = document.getElementById('param-recall-limit').value.trim() || '5';
+      document.getElementById('curl-recall').textContent = `curl${buildCurlHeader()} "http://127.0.0.1:14220/api/recall?limit=${limit}"`;
+    }
+
+    function testRecall() {
+      const limit = document.getElementById('param-recall-limit').value.trim() || '5';
+      executeApi('GET', `/api/recall?limit=${limit}`, null, 'res-recall');
+    }
+
+    function updateAllCurls() {
+      const h = buildCurlHeader();
+      document.getElementById('curl-health').textContent = `curl${h} http://127.0.0.1:14220/api/health`;
+      document.getElementById('curl-context').textContent = `curl${h} http://127.0.0.1:14220/api/context`;
+      document.getElementById('curl-act-cur').textContent = `curl${h} http://127.0.0.1:14220/api/activity/current`;
+      updateActTodayCurl();
+      updateActLogsCurl();
+      document.getElementById('curl-clip-latest').textContent = `curl${h} http://127.0.0.1:14220/api/clipboard/latest`;
+      updateClipListCurl();
+      updateClipSearchCurl();
+      document.getElementById('curl-env').textContent = `curl${h} http://127.0.0.1:14220/api/env`;
+      document.getElementById('curl-ports').textContent = `curl${h} http://127.0.0.1:14220/api/ports`;
+      updatePortsKillCurl();
+      updateMemoryCurl();
+      updateRecallCurl();
+    }
+
+    // 搜索侧边栏过滤
+    function filterMenuItems() {
+      const q = document.getElementById('menuFilter').value.trim().toLowerCase();
+      document.querySelectorAll('.menu-item').forEach((item) => {
+        const path = (item.getAttribute('data-path') || '').toLowerCase();
+        const text = item.textContent.toLowerCase();
+        if (!q || path.includes(q) || text.includes(q)) {
+          item.style.display = 'flex';
+        } else {
+          item.style.display = 'none';
+        }
+      });
+    }
+
+    // 滚动监听高亮当前激活项
+    window.addEventListener('scroll', () => {
+      const sections = document.querySelectorAll('.endpoint-card');
+      let currentId = '';
+      sections.forEach((sec) => {
+        const rect = sec.getBoundingClientRect();
+        if (rect.top <= 140 && rect.bottom >= 140) {
+          currentId = sec.id;
+        }
+      });
+      if (currentId) {
+        document.querySelectorAll('.menu-item').forEach((item) => {
+          if (item.getAttribute('href') === `#${currentId}`) {
+            item.classList.add('active');
+          } else {
+            item.classList.remove('active');
+          }
+        });
+      }
+    });
+
+    // 导出 Markdown 文档
+    function copyMarkdownDoc() {
+      const md = `# EVA Local Intelligence REST API 接口规范与集成文档 (v0.1.1)
+
+> **基础说明 (Overview)**:
+> EVA 嵌入式 HTTP 服务严格监听在本机回环网卡 \`127.0.0.1:14220\`。供外部 AI Agent（如 Antigravity, Cursor, Claude Code, OpenClaw 等）、Raycast 扩展、自动化脚本无缝安全获取桌面上下文。
+
+- **基础 URL (Base URL)**: \`http://127.0.0.1:14220\`
+- **协议格式**: \`HTTP/1.1\` + \`JSON (UTF-8)\`
+- **鉴权说明**: 开启 Token 鉴权模式时，请在请求头携带 \`Authorization: Bearer <token>\`；免密模式下直接发起请求即可。
+
+---
+
+## 接口清单
+
+### 1. 服务健康检查 (Health Check)
+- **请求方法**: \`GET /api/health\` (或 \`GET /health\`)
+- **调用示例**:
+  \`\`\`bash
+  curl http://127.0.0.1:14220/api/health
+  \`\`\`
+- **返回值示例 (200 OK)**:
+  \`\`\`json
+  {
+    "status": "ok",
+    "version": "0.1.1",
+    "service": "EVA Local Intelligence API"
+  }
+  \`\`\`
+
+---
+
+### 2. 全量桌面上下文快照 (Context Snapshot)
+- **请求方法**: \`GET /api/context\`
+- **功能说明**: 一网打尽当前活跃窗口、今日生产力时长分布、最新剪贴板内容与本地监听端口。
+- **调用示例**:
+  \`\`\`bash
+  curl http://127.0.0.1:14220/api/context
+  \`\`\`
+- **返回值示例 (200 OK)**:
+  \`\`\`json
+  {
+    "timestamp": 1787102800000,
+    "activeWindow": {
+      "appName": "Cursor",
+      "windowTitle": "http_server.rs — eva",
+      "projectName": "eva"
+    },
+    "todayProductivity": {
+      "date": "2026-08-19",
+      "totalMinutes": 185,
+      "topApps": [{"app": "Cursor", "duration": 6500}],
+      "categories": [{"category": "Development", "duration": 6500}]
+    },
+    "latestClipboard": {
+      "content": "const token = 'eva-local-token';",
+      "contentType": "text"
+    },
+    "listeningPorts": [{"port": 14220, "pid": 12345, "process": "eva"}]
+  }
+  \`\`\`
+
+---
+
+### 3. 当前聚焦活跃窗口 (Active Window)
+- **请求方法**: \`GET /api/activity/current\`
+- **调用示例**:
+  \`\`\`bash
+  curl http://127.0.0.1:14220/api/activity/current
+  \`\`\`
+- **返回值示例 (200 OK)**:
+  \`\`\`json
+  {
+    "appName": "Cursor",
+    "windowTitle": "http_server.rs — eva",
+    "projectName": "eva"
+  }
+  \`\`\`
+
+---
+
+### 4. 今日生产力统计 (Productivity Stats)
+- **请求方法**: \`GET /api/activity/today\`
+- **参数**: \`date\` (可选, \`YYYY-MM-DD\`)
+- **调用示例**:
+  \`\`\`bash
+  curl http://127.0.0.1:14220/api/activity/today
+  \`\`\`
+
+---
+
+### 5. 桌面活动时间线日志 (Activity Logs)
+- **请求方法**: \`GET /api/activity/logs\`
+- **参数**: \`date\` (可选), \`limit\` (默认 50), \`app\` (可选过滤)
+- **调用示例**:
+  \`\`\`bash
+  curl "http://127.0.0.1:14220/api/activity/logs?limit=10"
+  \`\`\`
+
+---
+
+### 6. 最新剪贴板文本与历史 (Latest Clipboard)
+- **请求方法**: \`GET /api/clipboard/latest\`
+- **调用示例**:
+  \`\`\`bash
+  curl http://127.0.0.1:14220/api/clipboard/latest
+  \`\`\`
+
+---
+
+### 7. 剪贴板历史列表 (Clipboard List)
+- **请求方法**: \`GET /api/clipboard/list\`
+- **参数**: \`limit\` (默认 20), \`offset\` (默认 0), \`date\` (可选)
+- **调用示例**:
+  \`\`\`bash
+  curl "http://127.0.0.1:14220/api/clipboard/list?limit=10"
+  \`\`\`
+
+---
+
+### 8. 搜索剪贴板历史 (Search Clipboard)
+- **请求方法**: \`GET /api/clipboard/search\`
+- **参数**: \`q\` (必填, 检索词), \`limit\` (默认 20)
+- **调用示例**:
+  \`\`\`bash
+  curl "http://127.0.0.1:14220/api/clipboard/search?q=hello"
+  \`\`\`
+
+---
+
+### 9. 开发环境与工具检测 (Env Detector)
+- **请求方法**: \`GET /api/env\` (或 \`GET /api/env/detect\`)
+- **调用示例**:
+  \`\`\`bash
+  curl http://127.0.0.1:14220/api/env
+  \`\`\`
+
+---
+
+### 10. 监听开发端口列表 (Listening Ports)
+- **请求方法**: \`GET /api/ports\` (或 \`GET /api/ports/list\`)
+- **调用示例**:
+  \`\`\`bash
+  curl http://127.0.0.1:14220/api/ports
+  \`\`\`
+
+---
+
+### 11. 按 PID 终止进程 (Kill Process)
+- **请求方法**: \`POST /api/ports/kill\`
+- **请求体**: \`{"pid": 12345}\`
+- **调用示例**:
+  \`\`\`bash
+  curl -X POST http://127.0.0.1:14220/api/ports/kill -H "Content-Type: application/json" -d '{"pid": 12345}'
+  \`\`\`
+
+---
+
+### 12. 内存占用与分析 (Memory Analyzer)
+- **请求方法**: \`GET /api/memory\`
+- **参数**: \`top\` (默认 10)
+- **调用示例**:
+  \`\`\`bash
+  curl "http://127.0.0.1:14220/api/memory?top=10"
+  \`\`\`
+
+---
+
+### 13. 视觉回溯历史 (Visual Recall)
+- **请求方法**: \`GET /api/recall\`
+- **参数**: \`limit\` (默认 20)
+- **调用示例**:
+  \`\`\`bash
+  curl "http://127.0.0.1:14220/api/recall?limit=10"
+  \`\`\`
+`;
+      navigator.clipboard.writeText(md).then(() => {
+        const btn = document.getElementById('copyDocBtn');
+        btn.innerHTML = `${CHECK_SVG}<span>已复制 Markdown 文档</span>`;
+        setTimeout(() => {
+          btn.innerHTML = `${COPY_SVG}<span>复制 Markdown 文档</span>`;
+        }, 2000);
+      });
+    }
+
+    // 初始化
+    initTheme();
+    if (window.location.port) {
+      document.getElementById('serverBadge').textContent = window.location.origin;
+    }
+  </script>
+</body>
+</html>

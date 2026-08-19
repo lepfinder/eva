@@ -186,7 +186,16 @@ fn start_server_thread(
             let path = parsed_url.path();
             let query_map: HashMap<String, String> = parsed_url.query_pairs().into_owned().collect();
 
-            // Health check endpoint (Open, no auth required)
+            // Interactive Documentation & Health check endpoints (Open, no auth required)
+            if method == Method::Get && (path == "/" || path == "/docs" || path == "/api/docs") {
+                let html = include_str!("api_docs.html");
+                let mut resp = Response::from_string(html).with_status_code(StatusCode(200));
+                resp.add_header(Header::from_bytes(&b"Content-Type"[..], &b"text/html; charset=utf-8"[..]).unwrap());
+                resp.add_header(Header::from_bytes(&b"Access-Control-Allow-Origin"[..], &b"*"[..]).unwrap());
+                let _ = request.respond(resp);
+                continue;
+            }
+
             if path == "/api/health" || path == "/health" {
                 #[derive(Serialize)]
                 struct Health {

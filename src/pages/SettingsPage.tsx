@@ -36,6 +36,7 @@ import {
   ShieldCheck,
   CheckCircle2,
   XCircle,
+  ExternalLink,
 } from 'lucide-react'
 
 // 存储统计类型
@@ -98,6 +99,8 @@ export function SettingsPage(): React.ReactElement {
   })
   const [showToken, setShowToken] = useState(false)
   const [copiedToken, setCopiedToken] = useState(false)
+  const [copiedBaseUrl, setCopiedBaseUrl] = useState(false)
+  const [apiHealth, setApiHealth] = useState<{ ok: boolean; latencyMs: number } | null>(null)
   const [savingApiConfig, setSavingApiConfig] = useState(false)
   const [apiSaveSuccess, setApiSaveSuccess] = useState(false)
   const [testStatus, setTestStatus] = useState<'idle' | 'testing' | 'success' | 'error'>('idle')
@@ -115,6 +118,32 @@ export function SettingsPage(): React.ReactElement {
       })
     }).catch((e: any) => console.error('Failed to get API config:', e))
   }, [])
+
+  // 探测 API 健康状态与延迟
+  useEffect(() => {
+    if (activeTab !== 'api' || !apiConfig.enabled) return
+    let active = true
+    const probe = async () => {
+      const start = performance.now()
+      try {
+        const res = await fetch(`http://127.0.0.1:${apiConfig.port}/api/health`)
+        if (res.ok && active) {
+          const latency = Math.round(performance.now() - start)
+          setApiHealth({ ok: true, latencyMs: latency })
+        } else if (active) {
+          setApiHealth(null)
+        }
+      } catch {
+        if (active) setApiHealth(null)
+      }
+    }
+    void probe()
+    const timer = setInterval(probe, 4000)
+    return () => {
+      active = false
+      clearInterval(timer)
+    }
+  }, [activeTab, apiConfig.enabled, apiConfig.port])
 
   const handleSaveApiConfig = async () => {
     setSavingApiConfig(true)
@@ -740,32 +769,117 @@ export function SettingsPage(): React.ReactElement {
 
             {activeTab === 'api' && (
               <div className="space-y-6 animate-in fade-in duration-300">
-                <Card>
-                  <CardHeader>
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <CardTitle className="flex items-center gap-2">
-                          <Radio className="h-5 w-5 text-primary" />
-                          API 服务 (AI Agent 接入)
-                        </CardTitle>
-                        <CardDescription>
-                          管理本地 HTTP REST API 服务，供外部 AI Agent、自动化脚本安全获取桌面上下文
-                        </CardDescription>
-                      </div>
+                {/* 标题说明 */}
+                <div>
+                  <h3 className="text-base font-bold flex items-center gap-2">
+                    <Radio className="h-5 w-5 text-primary" />
+                    REST API 服务 (API Service)
+                  </h3>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    EVA 嵌入式后台 HTTP 服务已启动，可用于外部脚本、Raycast 及第三方工具调用。
+                  </p>
+                </div>
+
+                {/* 核心服务状态与在线文档主入口卡片 (AgentDeck 风格) */}
+                <div className="rounded-2xl border bg-card p-6 space-y-6 shadow-xs">
+                  {/* 状态与 Base URL 栏 */}
+                  <div className="flex items-center justify-between flex-wrap gap-4">
+                    <div className="space-y-1.5">
+                      <div className="text-xs font-semibold text-muted-foreground">服务监听地址 (Base URL)</div>
                       <div className="flex items-center gap-2">
-                        {apiConfig.enabled ? (
-                          <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
-                            <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
-                            运行中 (127.0.0.1:{apiConfig.port}) {apiConfig.requireAuth ? '· Token 保护' : '· 本机免密'}
-                          </div>
-                        ) : (
-                          <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-muted text-muted-foreground border">
-                            <span className="h-2 w-2 rounded-full bg-muted-foreground" />
-                            已停用
-                          </div>
+                        <div className="px-3.5 py-2 rounded-xl bg-muted/70 border font-mono text-sm text-blue-500 dark:text-blue-400 font-bold select-all">
+                          http://127.0.0.1:{apiConfig.port}
+                        </div>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => {
+                            navigator.clipboard.writeText(`http://127.0.0.1:${apiConfig.port}`)
+                            setCopiedBaseUrl(true)
+                            setTimeout(() => setCopiedBaseUrl(false), 2000)
+                          }}
+                          className="h-9 px-3 text-xs gap-1.5 rounded-xl cursor-pointer"
+                          title="复制 Base URL"
+                        >
+                          {copiedBaseUrl ? <Check className="h-4 w-4 text-emerald-500" /> : <Copy className="h-4 w-4" />}
+                          <span>{copiedBaseUrl ? '已复制' : '复制'}</span>
+                        </Button>
+                      </div>
+                    </div>
+
+                    <div className="flex flex-col items-end gap-1.5">
+                      <div className="text-xs font-semibold text-muted-foreground">服务状态</div>
+                      <div className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-semibold border ${
+                        apiConfig.enabled && apiHealth?.ok
+                          ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20'
+                          : apiConfig.enabled
+                          ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20'
+                          : 'bg-muted text-muted-foreground border-border'
+                      }`}>
+                        {apiConfig.enabled && (
+                          <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse" />
+                        )}
+                        <span>
+                          {apiConfig.enabled
+                            ? (apiHealth?.ok ? '服务运行中 (Active)' : '服务已就绪 (Active)')
+                            : '服务已停用 (Disabled)'}
+                        </span>
+                        {apiHealth && (
+                          <span className="text-[11px] font-mono opacity-80">
+                            ({apiHealth.latencyMs}ms)
+                          </span>
                         )}
                       </div>
                     </div>
+                  </div>
+
+                  {/* 鉴权说明 Banner */}
+                  {!apiConfig.requireAuth ? (
+                    <div className="border border-blue-500/20 bg-blue-500/5 rounded-xl p-4 flex items-start gap-3">
+                      <div className="p-1.5 rounded-lg bg-blue-500/20 text-blue-500 dark:text-blue-400 mt-0.5 shrink-0">
+                        <Lock className="h-4 w-4" />
+                      </div>
+                      <div className="text-xs space-y-1">
+                        <div className="font-bold text-blue-500 dark:text-blue-400">免 Token 鉴权 (No Token Required)</div>
+                        <p className="text-muted-foreground text-xs leading-relaxed">
+                          当前服务默认严格限制在本机回环网卡（<code className="font-mono text-blue-400">127.0.0.1:{apiConfig.port}</code>），外部网络无法直连，保证本机数据安全的同时方便脚本直接免签调用。
+                        </p>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="border border-amber-500/20 bg-amber-500/5 rounded-xl p-4 flex items-start gap-3">
+                      <div className="p-1.5 rounded-lg bg-amber-500/20 text-amber-500 dark:text-amber-400 mt-0.5 shrink-0">
+                        <Lock className="h-4 w-4" />
+                      </div>
+                      <div className="text-xs space-y-1">
+                        <div className="font-bold text-amber-500 dark:text-amber-400">Token 身份校验保护 (Bearer Token Required)</div>
+                        <p className="text-muted-foreground text-xs leading-relaxed">
+                          已启用鉴权保护，外部 Agent 请求时必须携带 <code className="font-mono text-amber-400">Authorization: Bearer &lt;token&gt;</code> 请求头。
+                        </p>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* 核心主入口按钮：打开精美在线交互式文档 */}
+                  <Button
+                    onClick={() => window.api.openInBrowser(`http://127.0.0.1:${apiConfig.port}/docs`)}
+                    className="w-full py-6 bg-blue-600 hover:bg-blue-500 text-white font-bold text-sm rounded-xl transition-all duration-150 cursor-pointer shadow-md flex items-center justify-center gap-2"
+                  >
+                    <span>查看 API 文档</span>
+                    <ExternalLink className="h-4 w-4" />
+                  </Button>
+                </div>
+
+                {/* 服务配置卡片 */}
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="text-base flex items-center gap-2">
+                      <ShieldCheck className="h-4 w-4 text-primary" />
+                      服务与鉴权配置 (Configuration)
+                    </CardTitle>
+                    <CardDescription>
+                      配置 HTTP 监听端口、鉴权策略及访问凭证
+                    </CardDescription>
                   </CardHeader>
                   <CardContent className="space-y-6">
                     {/* 服务开关 */}
@@ -790,8 +904,8 @@ export function SettingsPage(): React.ReactElement {
                         <div className="flex items-center gap-2">
                           <label className="text-sm font-medium">开启 Token 身份校验</label>
                           {!apiConfig.requireAuth && (
-                            <span className="text-[10px] font-medium bg-amber-500/15 text-amber-600 dark:text-amber-400 px-2 py-0.5 rounded-full border border-amber-500/30">
-                              本机免 Token 模式 (127.0.0.1)
+                            <span className="text-[10px] font-medium bg-blue-500/15 text-blue-600 dark:text-blue-400 px-2 py-0.5 rounded-full border border-blue-500/30">
+                              本机免 Token 模式
                             </span>
                           )}
                         </div>
@@ -858,7 +972,7 @@ export function SettingsPage(): React.ReactElement {
                           <button
                             type="button"
                             onClick={() => setShowToken(!showToken)}
-                            className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                            className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground cursor-pointer"
                           >
                             {showToken ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                           </button>
@@ -866,7 +980,7 @@ export function SettingsPage(): React.ReactElement {
                         <Button
                           type="button"
                           variant="outline"
-                          className="gap-1.5"
+                          className="gap-1.5 cursor-pointer"
                           onClick={handleCopyToken}
                         >
                           {copiedToken ? <Check className="h-4 w-4 text-emerald-500" /> : <Copy className="h-4 w-4" />}
@@ -886,7 +1000,7 @@ export function SettingsPage(): React.ReactElement {
                       <Button
                         onClick={handleSaveApiConfig}
                         disabled={savingApiConfig}
-                        className="gap-2"
+                        className="gap-2 cursor-pointer"
                       >
                         {savingApiConfig ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShieldCheck className="h-4 w-4" />}
                         保存并应用配置
@@ -907,7 +1021,7 @@ export function SettingsPage(): React.ReactElement {
                       <div>
                         <CardTitle className="text-base flex items-center gap-2">
                           <Terminal className="h-4 w-4" />
-                          Agent 接入与连通性测试
+                          Agent 接入与快速调用示例
                         </CardTitle>
                         <CardDescription>
                           测试本地 HTTP 服务连接或直接复制对应语言的调用示例
@@ -918,7 +1032,7 @@ export function SettingsPage(): React.ReactElement {
                         size="sm"
                         onClick={handleTestApi}
                         disabled={testStatus === 'testing' || !apiConfig.enabled}
-                        className="gap-1.5"
+                        className="gap-1.5 cursor-pointer"
                       >
                         {testStatus === 'testing' && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
                         测试本地 API 连通性
@@ -945,7 +1059,7 @@ export function SettingsPage(): React.ReactElement {
                       <div className="flex gap-2 border-b pb-2">
                         <button
                           onClick={() => setActiveCodeLang('curl')}
-                          className={`text-xs px-2.5 py-1 rounded-md font-medium transition-colors ${
+                          className={`text-xs px-2.5 py-1 rounded-md font-medium transition-colors cursor-pointer ${
                             activeCodeLang === 'curl'
                               ? 'bg-primary text-primary-foreground'
                               : 'text-muted-foreground hover:text-foreground'
@@ -955,7 +1069,7 @@ export function SettingsPage(): React.ReactElement {
                         </button>
                         <button
                           onClick={() => setActiveCodeLang('python')}
-                          className={`text-xs px-2.5 py-1 rounded-md font-medium transition-colors ${
+                          className={`text-xs px-2.5 py-1 rounded-md font-medium transition-colors cursor-pointer ${
                             activeCodeLang === 'python'
                               ? 'bg-primary text-primary-foreground'
                               : 'text-muted-foreground hover:text-foreground'
@@ -965,7 +1079,7 @@ export function SettingsPage(): React.ReactElement {
                         </button>
                         <button
                           onClick={() => setActiveCodeLang('ts')}
-                          className={`text-xs px-2.5 py-1 rounded-md font-medium transition-colors ${
+                          className={`text-xs px-2.5 py-1 rounded-md font-medium transition-colors cursor-pointer ${
                             activeCodeLang === 'ts'
                               ? 'bg-primary text-primary-foreground'
                               : 'text-muted-foreground hover:text-foreground'
@@ -990,7 +1104,7 @@ export function SettingsPage(): React.ReactElement {
                         <Button
                           variant="ghost"
                           size="sm"
-                          className="absolute right-2 top-2 h-7 px-2 text-xs"
+                          className="absolute right-2 top-2 h-7 px-2 text-xs cursor-pointer"
                           onClick={() => {
                             let code = ''
                             if (activeCodeLang === 'curl') {
