@@ -255,6 +255,48 @@ fn expand_template(value: &str, project_dir: &Path) -> String {
         .replace('~', &home)
 }
 
+fn miloco_service_def(home: &Path) -> ServiceDefinition {
+    let miloco_dir = home.join("workspace/github/xiaomi-miloco");
+    let miloco_python = miloco_dir
+        .join("backend/.venv/bin/python")
+        .to_string_lossy()
+        .into_owned();
+
+    ServiceDefinition {
+        id: "miloco".into(),
+        name: "Xiaomi Miloco".into(),
+        project_dir: miloco_dir.to_string_lossy().into_owned(),
+        start: StartConfig {
+            command: vec![
+                miloco_python,
+                "-m".into(),
+                "miloco.main".into(),
+            ],
+            cwd: "{projectDir}/backend".into(),
+            env: HashMap::new(),
+            require_path: Some("{projectDir}/backend/.venv/bin/python".into()),
+        },
+        pre_start: None,
+        pid_file: "{projectDir}/data/miloco.pid".into(),
+        log_file: "{projectDir}/data/miloco.log".into(),
+        ports: vec![1810],
+        health: HealthConfig {
+            url: "http://127.0.0.1:1810/health".into(),
+            contains: Some("\"ok\"".into()),
+            status_ok: true,
+            fallback_urls: vec![],
+            accept_http_codes: vec!["200".into()],
+            timeout_secs: 60,
+            poll_interval_secs: 2,
+        },
+        open_url: "http://localhost:1810".into(),
+        stop: Some(StopConfig {
+            grace_secs: 15,
+            cleanup_ports: vec![1810],
+        }),
+    }
+}
+
 fn default_config(home: &Path) -> ServicesConfig {
     let personal = home.join("workspace/personal");
     let voxlab_dir = personal.join("VoxLab");
@@ -331,6 +373,7 @@ fn default_config(home: &Path) -> ServicesConfig {
                     cleanup_ports: vec![3000, 3001],
                 }),
             },
+            miloco_service_def(home),
         ],
     }
 }
@@ -373,6 +416,12 @@ fn migrate_config(config: &mut ServicesConfig) -> bool {
                 svc.health.accept_http_codes = vec!["200".into(), "404".into()];
                 changed = true;
             }
+        }
+    }
+    if !config.services.iter().any(|s| s.id == "miloco") {
+        if let Some(home) = dirs::home_dir() {
+            config.services.push(miloco_service_def(&home));
+            changed = true;
         }
     }
     changed
@@ -687,8 +736,13 @@ fn run_pre_start(def: &ServiceDefinition) -> Result<(), String> {
         return Ok(());
     }
     let cwd = expand_template(&pre.cwd, &project_dir);
-    let mut cmd = Command::new(&pre.command[0]);
-    cmd.args(&pre.command[1..]).current_dir(&cwd);
+    let cmd_program = expand_template(&pre.command[0], &project_dir);
+    let cmd_args: Vec<String> = pre.command[1..]
+        .iter()
+        .map(|arg| expand_template(arg, &project_dir))
+        .collect();
+    let mut cmd = Command::new(&cmd_program);
+    cmd.args(&cmd_args).current_dir(&cwd);
     let output = cmd
         .output()
         .map_err(|e| format!("preStart 执行失败: {}", e))?;
@@ -873,8 +927,13 @@ fn spawn_service(def: &ServiceDefinition) -> Result<u32, String> {
         .open(&log_file)
         .map_err(|e| format!("无法打开日志文件: {}", e))?;
 
-    let mut cmd = Command::new(&def.start.command[0]);
-    cmd.args(&def.start.command[1..])
+    let cmd_program = expand_template(&def.start.command[0], &project_dir);
+    let cmd_args: Vec<String> = def.start.command[1..]
+        .iter()
+        .map(|arg| expand_template(arg, &project_dir))
+        .collect();
+    let mut cmd = Command::new(&cmd_program);
+    cmd.args(&cmd_args)
         .current_dir(&cwd)
         .stdin(Stdio::null())
         .stdout(Stdio::from(log.try_clone().map_err(|e| e.to_string())?))
@@ -1389,5 +1448,12 @@ mod tests {
     fn strip_orphan_sgr_codes() {
         let raw = "[94mVoice:[0m hello";
         assert_eq!(strip_ansi(raw), "Voice: hello");
+    }
+
+    #[test]
+    fn default_config_contains_miloco() {
+        let home = PathBuf::from("/Users/test");
+        let cfg = default_config(&home);
+        assert!(cfg.services.iter().any(|s| s.id == "miloco" && s.ports == vec![1810]));
     }
 }

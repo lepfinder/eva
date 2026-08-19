@@ -1,7 +1,7 @@
 [package]
 name = "eva"
-version = "0.1.0"
-description = "EVA desktop app built with Tauri"
+version = "0.1.1"
+description = "EVA Desktop Context & Intelligence System for AI Agents"
 authors = ["xiyangxie"]
 license = "MIT"
 repository = ""

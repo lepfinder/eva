@@ -11,7 +11,7 @@ use std::path::PathBuf;
 
 /// EVA CLI — Agent-oriented Desktop Intelligence & Context CLI
 #[derive(Parser, Debug)]
-#[command(name = "eva-cli", version = "0.1.0", about = "EVA Desktop Context & Intelligence CLI for AI Agents")]
+#[command(name = "eva-cli", version = "0.1.1", about = "EVA Desktop Context & Intelligence CLI for AI Agents")]
 struct Cli {
     #[command(subcommand)]
     command: Commands,

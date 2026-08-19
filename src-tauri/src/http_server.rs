@@ -194,7 +194,7 @@ fn start_server_thread(
                     version: &'static str,
                     service: &'static str,
                 }
-                let _ = request.respond(json_response(&Health { status: "ok", version: "0.1.0", service: "EVA Local Intelligence API" }, 200));
+                let _ = request.respond(json_response(&Health { status: "ok", version: "0.1.1", service: "EVA Local Intelligence API" }, 200));
                 continue;
             }
 
