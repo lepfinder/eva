@@ -5,7 +5,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { getActiveAiConfig } from '@/components/AiProviderSettings'
-import { RefreshCw, Clock, Monitor, TrendingUp, Sparkles, FolderOpen, FileText, CalendarDays, SearchX, Play, List, EyeOff, ChevronRight, Calendar, ChevronLeft } from 'lucide-react'
+import { RefreshCw, Clock, Monitor, TrendingUp, Sparkles, FolderOpen, FileText, CalendarDays, SearchX, Play, List, EyeOff, ChevronRight, Calendar, ChevronLeft, Code2, Terminal, BookOpen, MessageSquare, PenLine, Palette, Gamepad2, Zap, Globe, Minus, Pause, Moon, Pin, HelpCircle, type LucideIcon } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, Legend } from 'recharts'
@@ -66,21 +66,21 @@ const COLORS = [
 ]
 
 // 类别配置
-const CATEGORY_CONFIG: Record<string, { name: string; icon: string; color: string }> = {
-    development: { name: '开发', icon: '💻', color: '#8b5cf6' },
-    operations: { name: '运维', icon: '🚀', color: '#ea580c' },
-    research: { name: '调研', icon: '📚', color: '#3b82f6' },
-    communication: { name: '沟通', icon: '💬', color: '#10b981' },
-    writing: { name: '写作', icon: '✏️', color: '#ec4899' },
-    design: { name: '设计', icon: '🎨', color: '#f43f5e' },
-    entertainment: { name: '娱乐', icon: '🎮', color: '#f59e0b' },
-    productivity: { name: '效率', icon: '📝', color: '#6366f1' },
-    browsing: { name: '浏览', icon: '🌐', color: '#06b6d4' },
-    distracted: { name: '走神', icon: '😶', color: '#64748b' },
-    system: { name: '系统', icon: '⏸️', color: '#9ca3af' },
-    offline: { name: '离线', icon: '🌙', color: '#6b7280' },
-    other: { name: '其他', icon: '📌', color: '#94a3b8' },
-    unclassified: { name: '未分类', icon: '❓', color: '#cbd5e1' },
+const CATEGORY_CONFIG: Record<string, { name: string; icon: string; IconComponent: LucideIcon; color: string }> = {
+    development:   { name: '开发',  icon: '💻', IconComponent: Code2,        color: '#8b5cf6' },
+    operations:    { name: '运维',  icon: '🚀', IconComponent: Terminal,      color: '#ea580c' },
+    research:      { name: '调研',  icon: '📚', IconComponent: BookOpen,      color: '#3b82f6' },
+    communication: { name: '沟通',  icon: '💬', IconComponent: MessageSquare, color: '#10b981' },
+    writing:       { name: '写作',  icon: '✏️', IconComponent: PenLine,       color: '#ec4899' },
+    design:        { name: '设计',  icon: '🎨', IconComponent: Palette,       color: '#f43f5e' },
+    entertainment: { name: '娱乐',  icon: '🎮', IconComponent: Gamepad2,      color: '#f59e0b' },
+    productivity:  { name: '效率',  icon: '📝', IconComponent: Zap,           color: '#6366f1' },
+    browsing:      { name: '浏览',  icon: '🌐', IconComponent: Globe,         color: '#06b6d4' },
+    distracted:    { name: '走神',  icon: '😶', IconComponent: Minus,         color: '#64748b' },
+    system:        { name: '系统',  icon: '⏸️', IconComponent: Pause,         color: '#9ca3af' },
+    offline:       { name: '离线',  icon: '🌙', IconComponent: Moon,          color: '#6b7280' },
+    other:         { name: '其他',  icon: '📌', IconComponent: Pin,           color: '#94a3b8' },
+    unclassified:  { name: '未分类', icon: '❓', IconComponent: HelpCircle,   color: '#cbd5e1' },
 }
 
 // 获取应用的颜色（如果未分类，根据名称生成固定颜色）
@@ -177,8 +177,14 @@ const ActivityLogItem = ({ log, visualRecallEnabled }: { log: ActivityLog; visua
                     {thumbnail ? (
                         <img src={thumbnail} className="w-full h-full object-cover" alt="" />
                     ) : (
-                        <div className="text-[10px] text-zinc-300 dark:text-zinc-700">
-                            {config?.icon || 'App'}
+                        <div
+                            className="w-full h-full flex items-center justify-center"
+                            style={{ backgroundColor: (config?.color ?? '#94a3b8') + '20', color: config?.color ?? '#94a3b8' }}
+                        >
+                            {config?.IconComponent
+                                ? <config.IconComponent className="h-3 w-3" />
+                                : <Monitor className="h-3 w-3" />
+                            }
                         </div>
                     )}
                 </div>
@@ -281,7 +287,8 @@ function VirtualizedActivityTable({ logs, remarkEdits, setRemarkEdits, setLogs, 
                             <div className="py-2 px-2 w-[60px] text-xs shrink-0">{formatDuration(log.duration)}</div>
                             <div className="py-2 px-2 w-[80px] shrink-0">
                                 <span className="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded" style={{ backgroundColor: `${categoryInfo.color}20`, color: categoryInfo.color }}>
-                                    {categoryInfo.icon} {categoryInfo.name}
+                                    <categoryInfo.IconComponent className="h-3 w-3 shrink-0" />
+                                    {categoryInfo.name}
                                 </span>
                             </div>
                             <div className="py-2 px-2 w-[200px] shrink-0">
@@ -932,7 +939,9 @@ ${lines}`
                                     }}
                                 >
                                     <div className="flex items-center gap-2 mb-3">
-                                        <span className="text-xl">{hoveredBlock.config.icon}</span>
+                                        <span className="flex items-center justify-center w-7 h-7 rounded-lg" style={{ backgroundColor: hoveredBlock.color + '20', color: hoveredBlock.color }}>
+                                            <hoveredBlock.config.IconComponent className="h-4 w-4" />
+                                        </span>
                                         <span
                                             className="px-3 py-1 rounded-full text-[10px] font-bold text-white uppercase tracking-wider"
                                             style={{ backgroundColor: hoveredBlock.color }}
@@ -995,10 +1004,10 @@ ${lines}`
                                         return (
                                             <div key={stat.category} className="flex items-center gap-3">
                                                 <div
-                                                    className="w-8 h-8 rounded-lg flex items-center justify-center text-lg shrink-0"
-                                                    style={{ backgroundColor: config.color + '20' }}
+                                                    className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0"
+                                                    style={{ backgroundColor: config.color + '20', color: config.color }}
                                                 >
-                                                    {config.icon}
+                                                    <config.IconComponent className="h-4 w-4" />
                                                 </div>
                                                 <div className="flex-1 min-w-0">
                                                     <p className="font-medium">{config.name}</p>
