@@ -255,6 +255,98 @@ fn expand_template(value: &str, project_dir: &Path) -> String {
         .replace('~', &home)
 }
 
+/// 构建包含常见开发工具路径（Homebrew、NVM、FNM、Bun、Cargo 等）的增强 PATH
+pub fn get_augmented_path() -> String {
+    let mut dirs_to_add: Vec<PathBuf> = vec![
+        PathBuf::from("/opt/homebrew/bin"),
+        PathBuf::from("/opt/homebrew/sbin"),
+        PathBuf::from("/usr/local/bin"),
+        PathBuf::from("/usr/local/sbin"),
+        PathBuf::from("/usr/bin"),
+        PathBuf::from("/bin"),
+        PathBuf::from("/usr/sbin"),
+        PathBuf::from("/sbin"),
+    ];
+
+    if let Some(home) = dirs::home_dir() {
+        dirs_to_add.insert(0, home.join(".local/bin"));
+        dirs_to_add.insert(0, home.join(".cargo/bin"));
+        dirs_to_add.insert(0, home.join(".bun/bin"));
+        dirs_to_add.insert(0, home.join("miniconda3/bin"));
+        dirs_to_add.insert(0, home.join("miniconda3/condabin"));
+
+        // NVM node versions
+        let nvm_versions = home.join(".nvm/versions/node");
+        if nvm_versions.is_dir() {
+            if let Ok(entries) = fs::read_dir(&nvm_versions) {
+                let mut node_dirs: Vec<PathBuf> = entries
+                    .filter_map(|e| e.ok())
+                    .map(|e| e.path().join("bin"))
+                    .filter(|p| p.is_dir())
+                    .collect();
+                node_dirs.sort();
+                node_dirs.reverse(); // latest version first
+                for p in node_dirs {
+                    dirs_to_add.insert(0, p);
+                }
+            }
+        }
+
+        // FNM current multishells
+        let fnm_dir = home.join(".local/state/fnm_multishells");
+        if fnm_dir.is_dir() {
+            if let Ok(entries) = fs::read_dir(&fnm_dir) {
+                for entry in entries.flatten() {
+                    let bin_path = entry.path().join("bin");
+                    if bin_path.is_dir() {
+                        dirs_to_add.insert(0, bin_path);
+                    }
+                }
+            }
+        }
+    }
+
+    let existing_path = std::env::var("PATH").unwrap_or_default();
+    let existing_parts: Vec<&str> = existing_path.split(':').collect();
+
+    let mut result_parts: Vec<String> = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+
+    for d in dirs_to_add {
+        let s = d.to_string_lossy().to_string();
+        if d.exists() && seen.insert(s.clone()) {
+            result_parts.push(s);
+        }
+    }
+
+    for p in existing_parts {
+        if !p.is_empty() && seen.insert(p.to_string()) {
+            result_parts.push(p.to_string());
+        }
+    }
+
+    result_parts.join(":")
+}
+
+/// 解析可执行命令的绝对路径（当命令为相对名称如 `npm` 时在增强 PATH 中搜索）
+pub fn resolve_executable(cmd: &str, path_var: &str) -> String {
+    let p = Path::new(cmd);
+    if p.is_absolute() || cmd.contains('/') {
+        return cmd.to_string();
+    }
+    for dir in path_var.split(':') {
+        if dir.is_empty() {
+            continue;
+        }
+        let candidate = Path::new(dir).join(cmd);
+        if candidate.is_file() {
+            return candidate.to_string_lossy().to_string();
+        }
+    }
+    cmd.to_string()
+}
+
+
 fn miloco_service_def(home: &Path) -> ServiceDefinition {
     let miloco_dir = home.join("workspace/github/xiaomi-miloco");
     let miloco_python = miloco_dir
@@ -736,13 +828,17 @@ fn run_pre_start(def: &ServiceDefinition) -> Result<(), String> {
         return Ok(());
     }
     let cwd = expand_template(&pre.cwd, &project_dir);
-    let cmd_program = expand_template(&pre.command[0], &project_dir);
+    let path_env = get_augmented_path();
+    let raw_program = expand_template(&pre.command[0], &project_dir);
+    let cmd_program = resolve_executable(&raw_program, &path_env);
     let cmd_args: Vec<String> = pre.command[1..]
         .iter()
         .map(|arg| expand_template(arg, &project_dir))
         .collect();
     let mut cmd = Command::new(&cmd_program);
-    cmd.args(&cmd_args).current_dir(&cwd);
+    cmd.args(&cmd_args)
+        .current_dir(&cwd)
+        .env("PATH", &path_env);
     let output = cmd
         .output()
         .map_err(|e| format!("preStart 执行失败: {}", e))?;
@@ -927,7 +1023,9 @@ fn spawn_service(def: &ServiceDefinition) -> Result<u32, String> {
         .open(&log_file)
         .map_err(|e| format!("无法打开日志文件: {}", e))?;
 
-    let cmd_program = expand_template(&def.start.command[0], &project_dir);
+    let path_env = get_augmented_path();
+    let raw_program = expand_template(&def.start.command[0], &project_dir);
+    let cmd_program = resolve_executable(&raw_program, &path_env);
     let cmd_args: Vec<String> = def.start.command[1..]
         .iter()
         .map(|arg| expand_template(arg, &project_dir))
@@ -938,6 +1036,7 @@ fn spawn_service(def: &ServiceDefinition) -> Result<u32, String> {
         .stdin(Stdio::null())
         .stdout(Stdio::from(log.try_clone().map_err(|e| e.to_string())?))
         .stderr(Stdio::from(log))
+        .env("PATH", &path_env)
         .envs(&def.start.env);
 
     let child = cmd
