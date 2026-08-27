@@ -50,7 +50,7 @@ EVA 内置了针对本地 AI Agent、自动化工作流（如 Dify、LangChain�
   "code": 200,
   "data": {
     "status": "ok",
-    "version": "0.1.1",
+    "version": "0.1.2",
     "service": "EVA Local Intelligence API"
   },
   "message": "success"
