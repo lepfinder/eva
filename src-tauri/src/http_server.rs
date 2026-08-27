@@ -317,6 +317,60 @@ fn start_server_thread(
                     }
                 }
 
+                // 3.5. Activity: Heatmap
+                (Method::Get, "/api/activity/heatmap") => {
+                    let year: Option<i32> = query_map.get("year").and_then(|y| y.parse().ok());
+                    let start_date = query_map.get("startDate").or_else(|| query_map.get("start_date")).cloned();
+                    let end_date = query_map.get("endDate").or_else(|| query_map.get("end_date")).cloned();
+
+                    if let Some(conn) = open_db(&user_data_dir, "activity-tracker.db") {
+                        let (start, end) = if let (Some(s), Some(e)) = (start_date, end_date) {
+                            (s, e)
+                        } else {
+                            let y = year.unwrap_or(2026);
+                            (format!("{}-01-01", y), format!("{}-12-31", y))
+                        };
+
+                        let mut stmt = match conn.prepare(
+                            "SELECT date, total_duration, primary_category, productivity_score FROM daily_stats WHERE date>=?1 AND date<=?2 ORDER BY date ASC"
+                        ) {
+                            Ok(s) => s,
+                            Err(e) => {
+                                let _ = request.respond(error_response(&e.to_string(), 500));
+                                continue;
+                            }
+                        };
+
+                        let rows = stmt.query_map(rusqlite::params![start, end], |r| {
+                            let date: String = r.get(0)?;
+                            let total: i64 = r.get::<_, Option<i64>>(1)?.unwrap_or(0);
+                            let primary_cat: Option<String> = r.get(2)?;
+                            let score: f64 = r.get::<_, Option<f64>>(3)?.unwrap_or(50.0);
+                            let hue = match primary_cat.as_deref() {
+                                Some("development") | Some("writing") | Some("operations") => "violet",
+                                Some("distracted") | Some("entertainment") => "orange",
+                                _ => "indigo",
+                            }.to_string();
+                            Ok(serde_json::json!({
+                                "date": date,
+                                "total": total,
+                                "totalHours": (total as f64 / 3600.0 * 10.0).round() / 10.0,
+                                "hue": hue,
+                                "score": score,
+                                "category": primary_cat,
+                            }))
+                        });
+
+                        let points: Vec<serde_json::Value> = match rows {
+                            Ok(mapped) => mapped.flatten().collect(),
+                            Err(_) => vec![],
+                        };
+                        let _ = request.respond(json_response(&serde_json::json!({ "ok": true, "heatmap": points }), 200));
+                    } else {
+                        let _ = request.respond(error_response("Database unavailable", 500));
+                    }
+                }
+
                 // 4. Activity: Logs
                 (Method::Get, "/api/activity/logs") => {
                     let date_str = query_map.get("date").cloned().unwrap_or_else(|| activity_tracker::chrono_date_str(activity_tracker::now_ms()));
