@@ -1030,6 +1030,50 @@ pub fn emit_clipboard_url_if_present(app: &AppHandle, state: &SharedClipboardSta
     }
 }
 
+#[tauri::command]
+pub fn clipboard_write_image_data(
+    state: tauri::State<SharedClipboardState>,
+    data_base64: String,
+) -> bool {
+    let clean_base64 = if let Some(idx) = data_base64.find(',') {
+        &data_base64[idx + 1..]
+    } else {
+        &data_base64
+    };
+
+    use base64::Engine;
+    let bytes = match base64::engine::general_purpose::STANDARD.decode(clean_base64) {
+        Ok(b) => b,
+        Err(_) => return false,
+    };
+
+    let img = match image::load_from_memory(&bytes) {
+        Ok(i) => i,
+        Err(_) => return false,
+    };
+
+    let rgba = img.to_rgba8();
+    let (w, h) = rgba.dimensions();
+    let raw_bytes = rgba.into_raw();
+
+    if let Ok(mut guard) = state.lock() {
+        guard.image_write_cooldown_until = now_ms() + 6_000;
+    }
+
+    let mut cb = match Clipboard::new() {
+        Ok(c) => c,
+        Err(_) => return false,
+    };
+
+    let img_data = arboard::ImageData {
+        width: w as usize,
+        height: h as usize,
+        bytes: std::borrow::Cow::Owned(raw_bytes),
+    };
+
+    cb.set_image(img_data).is_ok()
+}
+
 pub fn init(app: &AppHandle) -> SharedClipboardState {
     let data_dir = app
         .path()

@@ -5,7 +5,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { getActiveAiConfig } from '@/components/AiProviderSettings'
-import { RefreshCw, Clock, Monitor, TrendingUp, Sparkles, FolderOpen, FileText, CalendarDays, SearchX, Play, List, EyeOff, ChevronRight, Calendar, ChevronLeft, Code2, Terminal, BookOpen, MessageSquare, PenLine, Palette, Gamepad2, Zap, Globe, Minus, Pause, Moon, Pin, HelpCircle, type LucideIcon } from 'lucide-react'
+import { RefreshCw, Clock, Monitor, TrendingUp, Sparkles, FolderOpen, FileText, CalendarDays, SearchX, Play, List, EyeOff, ChevronRight, Calendar, ChevronLeft, Code2, Terminal, BookOpen, MessageSquare, PenLine, Palette, Gamepad2, Zap, Globe, Minus, Pause, Moon, Pin, HelpCircle, Receipt, type LucideIcon } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, Legend } from 'recharts'
@@ -13,6 +13,7 @@ import { Slider } from '@/components/ui/slider'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { TimeCapsule } from '@/components/TimeCapsule'
+import { TimeReceipt } from '@/components/TimeReceipt'
 import { ProductivityHeatmap } from '@/components/ProductivityHeatmap'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
@@ -332,6 +333,8 @@ export function TimeAuditorPage() {
 
     // Time Capsule 状态
     const [showTimeCapsule, setShowTimeCapsule] = useState(false)
+    // 时间小票状态
+    const [showReceipt, setShowReceipt] = useState(false)
     // All Activities Dialog
     const [showAllActivities, setShowAllActivities] = useState(false)
     const [remarkEdits, setRemarkEdits] = useState<Record<string, string>>({})
@@ -662,6 +665,14 @@ ${lines}`
                             className="h-9 w-9"
                         >
                             <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+                        </Button>
+                        <Button
+                            size="sm"
+                            onClick={() => setShowReceipt(true)}
+                            className="gap-1.5 bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white font-medium shadow-lg shadow-orange-500/20 h-9"
+                        >
+                            <Receipt className="h-4 w-4" />
+                            时间小票
                         </Button>
                         <Button
                             size="sm"
@@ -1152,6 +1163,17 @@ ${lines}`
                 isOpen={showTimeCapsule}
                 onClose={() => setShowTimeCapsule(false)}
                 date={selectedDate}
+            />
+
+            {/* 时间小票 Receipt */}
+            <TimeReceipt
+                open={showReceipt}
+                onOpenChange={setShowReceipt}
+                selectedDate={selectedDate}
+                totalDuration={totalDuration}
+                appStats={stats}
+                logs={logs}
+                summary={summary}
             />
 
 

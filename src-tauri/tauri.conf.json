@@ -12,6 +12,7 @@
   "app": {
     "windows": [
       {
+        "label": "main",
         "title": "EVA",
         "width": 1280,
         "height": 800,
@@ -23,6 +24,21 @@
         "titleBarStyle": "Overlay",
         "hiddenTitle": true,
         "backgroundColor": "#09090b"
+      },
+      {
+        "label": "tray-receipt",
+        "title": "EVA Time Receipt",
+        "url": "index.html?window=tray-receipt",
+        "width": 360,
+        "height": 540,
+        "resizable": false,
+        "fullscreen": false,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "visible": false,
+        "shadow": true
       }
     ],
     "security": {
