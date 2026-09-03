@@ -2,7 +2,7 @@
  * 本地监听端口工具
  * 查看和管理本地监听的端口
  */
-import { useState, useCallback, useEffect, useMemo } from 'react'
+import { useState, useCallback, useEffect, useMemo, useRef } from 'react'
 import { Search, RefreshCw, Loader2, Radio, Globe, Skull } from 'lucide-react'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -29,6 +29,28 @@ export function LocalPorts() {
     const [loading, setLoading] = useState(false)
     const [searchQuery, setSearchQuery] = useState('')
     const [actionLoading, setActionLoading] = useState<string | null>(null)
+    const inputRef = useRef<HTMLInputElement>(null)
+
+    // 页面加载或按 Cmd+P 时自动聚焦并全选搜索框
+    useEffect(() => {
+        const timer = setTimeout(() => {
+            inputRef.current?.focus()
+            inputRef.current?.select()
+        }, 80)
+        return () => clearTimeout(timer)
+    }, [])
+
+    useEffect(() => {
+        const handleKeyDown = (e: KeyboardEvent) => {
+            if ((e.metaKey || e.ctrlKey) && (e.key === 'p' || e.key === 'P')) {
+                e.preventDefault()
+                inputRef.current?.focus()
+                inputRef.current?.select()
+            }
+        }
+        window.addEventListener('keydown', handleKeyDown)
+        return () => window.removeEventListener('keydown', handleKeyDown)
+    }, [])
 
     // 加载端口列表
     const fetchListeningPorts = useCallback(async () => {
@@ -92,12 +114,25 @@ export function LocalPorts() {
                         <Search className="h-4 w-4 text-muted-foreground" />
                     </span>
                     <Input
+                        ref={inputRef}
                         type="text"
                         placeholder="搜索端口号、进程名..."
                         value={searchQuery}
                         onChange={(e) => setSearchQuery(e.target.value)}
-                        className="pl-9"
+                        className="pl-9 pr-8"
                     />
+                    {searchQuery && (
+                        <button
+                            onClick={() => {
+                                setSearchQuery('')
+                                inputRef.current?.focus()
+                            }}
+                            className="absolute inset-y-0 right-0 flex items-center pr-2.5 text-muted-foreground hover:text-foreground text-xs"
+                            title="清空搜索"
+                        >
+                            ✕
+                        </button>
+                    )}
                 </div>
                 <div className="flex items-center gap-2">
                     <Badge variant="secondary">

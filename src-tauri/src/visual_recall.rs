@@ -342,11 +342,29 @@ fn db_insert(
     Some(conn.last_insert_rowid())
 }
 
+pub fn db_count_by_time_range(
+    data_path: &Path,
+    start_ts: i64,
+    end_ts: i64,
+) -> usize {
+    let conn = match Connection::open(db_path(data_path)) {
+        Ok(c) => c,
+        Err(_) => return 0,
+    };
+    conn.query_row(
+        "SELECT COUNT(*) FROM screen_snapshots WHERE timestamp >= ?1 AND timestamp <= ?2",
+        params![start_ts, end_ts],
+        |row| row.get(0),
+    )
+    .unwrap_or(0)
+}
+
 pub fn db_query_by_time_range(
     data_path: &Path,
     start_ts: i64,
     end_ts: i64,
     limit: i64,
+    offset: i64,
 ) -> Vec<VrSnapshot> {
     let conn = match Connection::open(db_path(data_path)) {
         Ok(c) => c,
@@ -357,13 +375,13 @@ pub fn db_query_by_time_range(
          FROM screen_snapshots \
          WHERE timestamp >= ?1 AND timestamp <= ?2 \
          ORDER BY timestamp DESC \
-         LIMIT ?3",
+         LIMIT ?3 OFFSET ?4",
     ) {
         Ok(s) => s,
         Err(_) => return vec![],
     };
 
-    stmt.query_map(params![start_ts, end_ts, limit], |row| {
+    stmt.query_map(params![start_ts, end_ts, limit, offset], |row| {
         Ok(VrSnapshot {
             id: row.get(0)?,
             timestamp: row.get(1)?,
@@ -858,12 +876,14 @@ pub fn visual_recall_search_snapshots(
     start_time: i64,
     end_time: i64,
     limit: Option<i64>,
+    offset: Option<i64>,
     state: State<'_, VisualRecallState>,
 ) -> VrSearchResult {
     let data_path = state.0.lock().unwrap().data_path.clone();
     let limit = limit.unwrap_or(100);
-    let snapshots = db_query_by_time_range(&data_path, start_time, end_time, limit);
-    let total = snapshots.len();
+    let offset = offset.unwrap_or(0);
+    let total = db_count_by_time_range(&data_path, start_time, end_time);
+    let snapshots = db_query_by_time_range(&data_path, start_time, end_time, limit, offset);
     VrSearchResult { snapshots, total }
 }
 

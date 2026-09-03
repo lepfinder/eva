@@ -9,6 +9,7 @@ import { toPng } from 'html-to-image'
 import { Download, Copy, Check, Sparkles, RefreshCw, ExternalLink, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Barcode } from '@/components/Barcode'
+import { formatDurationShort, balanceReceiptDurations } from '@/lib/receiptHelper'
 
 interface AppStat {
     appName: string
@@ -23,14 +24,6 @@ interface ActivityLog {
     startTime: number
     endTime: number
     duration: number
-}
-
-function formatDurationShort(seconds: number): string {
-    if (seconds < 60) return `${seconds}s`
-    const hours = Math.floor(seconds / 3600)
-    const mins = Math.floor((seconds % 3600) / 60)
-    if (hours === 0) return `${mins}m`
-    return mins > 0 ? `${hours}h ${mins}m` : `${hours}h`
 }
 
 function renderAsciiBar(percentage: number, maxBarLength = 6): string {
@@ -194,7 +187,22 @@ export function TrayReceiptView() {
 
         const miscDuration = miscApps.reduce((acc, curr) => acc + curr.totalDuration, 0)
         const miscPercentage = totalDuration > 0 ? Math.round((miscDuration / totalDuration) * 100) : 0
-        const biggestSink = topApps[0] || null
+        const hasMisc = miscApps.length > 0
+
+        // 配平展示项时长，确保各项相加 100% 精确等于小票 SUBTOTAL
+        const itemDurations = topApps.map(a => a.totalDuration)
+        if (hasMisc) {
+            itemDurations.push(miscDuration)
+        }
+        const { itemFormatted, subtotalFormatted } = balanceReceiptDurations(itemDurations, totalDuration)
+
+        const balancedTopApps = topApps.map((app, idx) => ({
+            ...app,
+            formattedDuration: itemFormatted[idx]
+        }))
+        const miscFormatted = hasMisc ? itemFormatted[itemFormatted.length - 1] : ''
+
+        const biggestSink = balancedTopApps[0] || null
 
         let longestFocus: { appName: string; duration: number } | null = null
         if (logs.length > 0) {
@@ -229,11 +237,13 @@ export function TrayReceiptView() {
         }).toUpperCase()
 
         return {
-            topApps,
-            hasMisc: miscApps.length > 0,
+            topApps: balancedTopApps,
+            hasMisc,
             miscCount: miscApps.length,
             miscDuration,
             miscPercentage,
+            miscFormatted,
+            subtotalFormatted,
             biggestSink,
             longestFocus,
             cleanAiSnippet,
@@ -446,7 +456,7 @@ export function TrayReceiptView() {
                                         {renderAsciiBar(item.percentage)}
                                     </span>
                                     <span className="w-12 text-right font-semibold">
-                                        {formatDurationShort(item.totalDuration)}
+                                        {item.formattedDuration}
                                     </span>
                                 </div>
                             ))}
@@ -461,7 +471,7 @@ export function TrayReceiptView() {
                                         {renderAsciiBar(receiptData.miscPercentage)}
                                     </span>
                                     <span className="w-12 text-right font-semibold">
-                                        {formatDurationShort(receiptData.miscDuration)}
+                                        {receiptData.miscFormatted}
                                     </span>
                                 </div>
                             )}
@@ -473,7 +483,7 @@ export function TrayReceiptView() {
                                 <div className="flex justify-between items-center">
                                     <span className="text-zinc-600">TIME SINK:</span>
                                     <span className="font-semibold truncate max-w-[150px] text-right">
-                                        {receiptData.biggestSink.appName} ({formatDurationShort(receiptData.biggestSink.totalDuration)})
+                                        {receiptData.biggestSink.appName} ({receiptData.biggestSink.formattedDuration})
                                     </span>
                                 </div>
                             )}
@@ -495,7 +505,7 @@ export function TrayReceiptView() {
                         <div className="border-t-2 border-zinc-800 pt-1.5 mb-1.5">
                             <div className="flex justify-between text-[11px] font-bold">
                                 <span>SUBTOTAL</span>
-                                <span>{formatDurationShort(totalDuration)}</span>
+                                <span>{receiptData.subtotalFormatted}</span>
                             </div>
                             <div className="text-[8px] text-zinc-500 uppercase tracking-widest mt-0.5">
                                 DOORS LOCKED. GO HOME.

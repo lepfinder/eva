@@ -72,19 +72,25 @@ function SnapshotImage({ path, className }: { path: string; className?: string }
     return <img src={src} className={className} loading="lazy" alt="snapshot" />
 }
 
+const PAGE_SIZE = 200
+
 export function VisualRecallPage() {
     // 状态
     const [enabled, setEnabled] = useState(false)
     const [loading, setLoading] = useState(false)
+    const [loadingMore, setLoadingMore] = useState(false)
     const [snapshots, setSnapshots] = useState<Snapshot[]>([])
+    const [totalCount, setTotalCount] = useState<number>(0)
     const [selectedSnapshot, setSelectedSnapshot] = useState<Snapshot | null>(null)
     const [selectedDate, setSelectedDate] = useState<Date>(new Date())
     const [selectedApp, setSelectedApp] = useState<string>('all')
     const [searchKeyword, setSearchKeyword] = useState<string>('')
+    const observerTarget = useRef<HTMLDivElement | null>(null)
 
     // 时间轴 scrubber 状态
     const [timelineIndex, setTimelineIndex] = useState<number>(0)
-    const [showTimeline, setShowTimeline] = useState<boolean>(true)
+    const [showTimeline, setShowTimeline] = useState<boolean>(false)
+    const [isPlaying, setIsPlaying] = useState<boolean>(false)
     const [showTimeCapsule, setShowTimeCapsule] = useState<boolean>(false)
     const [hasPermission, setHasPermission] = useState<boolean>(true)
 
@@ -107,7 +113,7 @@ export function VisualRecallPage() {
         }, 1000)
     }
 
-    // 加载指定日期的快照
+    // 加载指定日期的快照（首批 200 帧）
     const loadSnapshots = useCallback(async () => {
         setLoading(true)
         try {
@@ -121,11 +127,13 @@ export function VisualRecallPage() {
                 {
                     startTime: startOfDay.getTime(),
                     endTime: endOfDay.getTime(),
-                    limit: 300, // 充足展示当日视觉记录
+                    limit: PAGE_SIZE,
+                    offset: 0,
                 }
             )
 
-            setSnapshots(response.snapshots)
+            setSnapshots(response.snapshots || [])
+            setTotalCount(response.total || 0)
             setTimelineIndex(0)
         } catch (err) {
             console.error('[VisualRecall] loadSnapshots failed:', err)
@@ -134,10 +142,70 @@ export function VisualRecallPage() {
         }
     }, [selectedDate])
 
+    // 加载更多（下一批 200 帧）
+    const loadMore = useCallback(async () => {
+        if (loading || loadingMore || snapshots.length >= totalCount) return
+        setLoadingMore(true)
+        try {
+            const startOfDay = new Date(selectedDate)
+            startOfDay.setHours(0, 0, 0, 0)
+            const endOfDay = new Date(selectedDate)
+            endOfDay.setHours(23, 59, 59, 999)
+
+            const response = await invoke<{ snapshots: Snapshot[]; total: number }>(
+                'visual_recall_search_snapshots',
+                {
+                    startTime: startOfDay.getTime(),
+                    endTime: endOfDay.getTime(),
+                    limit: PAGE_SIZE,
+                    offset: snapshots.length,
+                }
+            )
+
+            if (response.snapshots && response.snapshots.length > 0) {
+                setSnapshots(prev => {
+                    const existingIds = new Set(prev.map(s => s.id))
+                    const newItems = response.snapshots.filter(s => !existingIds.has(s.id))
+                    return [...prev, ...newItems]
+                })
+            }
+            setTotalCount(response.total || 0)
+        } catch (err) {
+            console.error('[VisualRecall] loadMore failed:', err)
+        } finally {
+            setLoadingMore(false)
+        }
+    }, [loading, loadingMore, snapshots.length, totalCount, selectedDate])
+
     // 日期变化时重新加载
     useEffect(() => {
         loadSnapshots()
     }, [selectedDate, loadSnapshots])
+
+    // 监听滚动到底部自动加载更多
+    useEffect(() => {
+        const target = observerTarget.current
+        if (!target) return
+
+        const observer = new IntersectionObserver(
+            entries => {
+                if (entries[0]?.isIntersecting && !loading && !loadingMore && snapshots.length < totalCount) {
+                    loadMore()
+                }
+            },
+            { threshold: 0.1, rootMargin: '300px' }
+        )
+
+        observer.observe(target)
+        return () => observer.disconnect()
+    }, [loadMore, loading, loadingMore, snapshots.length, totalCount])
+
+    const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
+        const { scrollTop, scrollHeight, clientHeight } = e.currentTarget
+        if (scrollHeight - scrollTop - clientHeight < 300 && !loading && !loadingMore && snapshots.length < totalCount) {
+            loadMore()
+        }
+    }
 
     // 切换录制状态
     const toggleRecording = async () => {
@@ -224,6 +292,49 @@ export function VisualRecallPage() {
         return () => window.removeEventListener('keydown', handleKeyDown)
     }, [selectedSnapshot, filteredSnapshots])
 
+    // 时间轴自动播放
+    useEffect(() => {
+        if (!isPlaying || !showTimeline || chronologicalSnapshots.length === 0) return
+        const timer = setInterval(() => {
+            setTimelineIndex(prev => {
+                if (prev >= chronologicalSnapshots.length - 1) {
+                    setIsPlaying(false)
+                    return prev
+                }
+                return prev + 1
+            })
+        }, 300)
+        return () => clearInterval(timer)
+    }, [isPlaying, showTimeline, chronologicalSnapshots.length])
+
+    // 时间轴独立弹窗快捷按键
+    useEffect(() => {
+        if (!showTimeline) return
+
+        const handleKeyDown = (e: KeyboardEvent) => {
+            if (['INPUT', 'TEXTAREA'].includes((e.target as HTMLElement)?.tagName)) return
+
+            if (e.key === 'ArrowLeft') {
+                e.preventDefault()
+                setIsPlaying(false)
+                setTimelineIndex(prev => Math.max(0, prev - 1))
+            } else if (e.key === 'ArrowRight') {
+                e.preventDefault()
+                setIsPlaying(false)
+                setTimelineIndex(prev => Math.min(chronologicalSnapshots.length - 1, prev + 1))
+            } else if (e.key === ' ') {
+                e.preventDefault()
+                setIsPlaying(prev => !prev)
+            } else if (e.key === 'Escape') {
+                setShowTimeline(false)
+                setIsPlaying(false)
+            }
+        }
+
+        window.addEventListener('keydown', handleKeyDown)
+        return () => window.removeEventListener('keydown', handleKeyDown)
+    }, [showTimeline, chronologicalSnapshots.length])
+
     return (
         <div className="h-full flex flex-col space-y-4">
             {/* 权限提示横幅 */}
@@ -262,7 +373,12 @@ export function VisualRecallPage() {
                         {enabled ? '正在连续记录' : '已暂停'}
                     </Badge>
                     <span className="text-xs text-muted-foreground hidden sm:inline">
-                        共 {snapshots.length} 帧
+                        共 {totalCount} 帧
+                        {snapshots.length < totalCount && (
+                            <span className="opacity-70 ml-1">
+                                (已加载 {snapshots.length})
+                            </span>
+                        )}
                     </span>
                 </div>
 
@@ -276,16 +392,18 @@ export function VisualRecallPage() {
 
                     <div className="w-px h-5 bg-border/80 mx-1" />
 
-                    {/* 时间轴切换按钮 */}
+                    {/* 时间轴弹窗按钮 */}
                     <Button
-                        variant={showTimeline ? 'secondary' : 'ghost'}
+                        variant="outline"
                         size="sm"
-                        onClick={() => setShowTimeline(!showTimeline)}
-                        className={clsx(
-                            'gap-1.5 text-xs h-8 px-2.5 rounded-xl border border-transparent transition-all',
-                            showTimeline && 'border-border/60 bg-muted/80 font-medium'
-                        )}
-                        title="切换时间轴回放模式"
+                        onClick={() => {
+                            if (chronologicalSnapshots.length > 0) {
+                                setTimelineIndex(chronologicalSnapshots.length - 1)
+                            }
+                            setShowTimeline(true)
+                        }}
+                        className="gap-1.5 text-xs h-8 px-2.5 rounded-xl border-border/70 hover:bg-muted/80 font-medium transition-all"
+                        title="打开时间轴实时回溯独立窗口"
                     >
                         <Sliders className="h-3.5 w-3.5 text-muted-foreground" />
                         时间轴
@@ -360,7 +478,7 @@ export function VisualRecallPage() {
                         onClick={() => setSelectedApp('all')}
                         className="h-7 text-xs px-2.5 rounded-full"
                     >
-                        全部 ({snapshots.length})
+                        全部 ({totalCount})
                     </Button>
                     {appOptions.slice(0, 8).map(([appName, count]) => (
                         <Button
@@ -376,55 +494,10 @@ export function VisualRecallPage() {
                 </div>
             </div>
 
-            {/* 时间轴 Scrubber 交互区 (借鉴 Screenpipe scrub 模式) */}
-            {showTimeline && chronologicalSnapshots.length > 0 && (
-                <Card className="p-3.5 bg-card/60 backdrop-blur-md border shadow-sm shrink-0">
-                    <div className="flex flex-col gap-2">
-                        <div className="flex items-center justify-between text-xs font-mono">
-                            <span className="text-muted-foreground flex items-center gap-1.5">
-                                <Clock className="h-3.5 w-3.5 text-primary" />
-                                时间轴精确定位:
-                                <strong className="text-foreground">
-                                    {activeTimelineSnapshot ? formatTime(activeTimelineSnapshot.timestamp) : '--:--:--'}
-                                </strong>
-                                {activeTimelineSnapshot && (
-                                    <span className="text-muted-foreground font-sans font-normal ml-2">
-                                        [{activeTimelineSnapshot.appName}] {activeTimelineSnapshot.windowTitle}
-                                    </span>
-                                )}
-                            </span>
-                            <span className="text-muted-foreground">
-                                {timelineIndex + 1} / {chronologicalSnapshots.length} 帧
-                            </span>
-                        </div>
 
-                        <div className="flex items-center gap-3">
-                            <Slider
-                                value={[timelineIndex]}
-                                max={Math.max(0, chronologicalSnapshots.length - 1)}
-                                step={1}
-                                onValueChange={vals => setTimelineIndex(vals[0])}
-                                className="cursor-pointer"
-                            />
-                            <Button
-                                size="sm"
-                                variant="outline"
-                                className="h-7 text-xs px-2 shrink-0"
-                                onClick={() => {
-                                    if (activeTimelineSnapshot) {
-                                        setSelectedSnapshot(activeTimelineSnapshot)
-                                    }
-                                }}
-                            >
-                                放大预览
-                            </Button>
-                        </div>
-                    </div>
-                </Card>
-            )}
 
             {/* 网格视图 Content */}
-            <div className="flex-1 overflow-y-auto min-h-0 pr-2">
+            <div className="flex-1 overflow-y-auto min-h-0 pr-2" onScroll={handleScroll}>
                 {filteredSnapshots.length === 0 && !loading ? (
                     <div className="h-full flex flex-col items-center justify-center text-muted-foreground p-8">
                         <ImageIcon className="h-12 w-12 mb-4 opacity-20" />
@@ -476,6 +549,31 @@ export function VisualRecallPage() {
                                 </CardContent>
                             </Card>
                         ))}
+                    </div>
+                )}
+
+                {/* 底部加载更多与哨兵元素 */}
+                {!loading && snapshots.length > 0 && (
+                    <div ref={observerTarget} className="py-4 flex flex-col items-center justify-center text-xs text-muted-foreground">
+                        {loadingMore ? (
+                            <div className="flex items-center gap-2 py-2">
+                                <RefreshCw className="h-4 w-4 animate-spin text-primary" />
+                                <span>正在载入更多历史帧...</span>
+                            </div>
+                        ) : snapshots.length < totalCount ? (
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={loadMore}
+                                className="text-xs h-8 rounded-lg text-muted-foreground hover:text-foreground"
+                            >
+                                滚动加载更多 (已载入 {snapshots.length} / 共 {totalCount} 帧)
+                            </Button>
+                        ) : (
+                            <p className="text-muted-foreground/60 py-2">
+                                已显示全天全部 {totalCount} 帧记录
+                            </p>
+                        )}
                     </div>
                 )}
 
@@ -578,6 +676,185 @@ export function VisualRecallPage() {
                             </div>
                         </div>
                     )}
+                </DialogContent>
+            </Dialog>
+
+            {/* 时间轴独立回溯弹窗 (拖动滑块实时展示对应画面) */}
+            <Dialog
+                open={showTimeline}
+                onOpenChange={open => {
+                    setShowTimeline(open)
+                    if (!open) setIsPlaying(false)
+                }}
+            >
+                <DialogContent className="max-w-7xl w-[94vw] h-[90vh] flex flex-col p-0 gap-0 overflow-hidden border border-zinc-800 shadow-2xl bg-zinc-950 text-white select-none">
+                    {/* 顶部标题栏 */}
+                    <div className="flex items-center justify-between px-5 py-3 border-b border-zinc-800/80 bg-zinc-900/60 shrink-0">
+                        <div className="flex items-center gap-3">
+                            <div className="flex items-center gap-2">
+                                <Sliders className="h-4 w-4 text-primary" />
+                                <span className="font-semibold text-sm tracking-tight text-white">时间轴回溯</span>
+                            </div>
+                            {activeTimelineSnapshot && (
+                                <Badge variant="secondary" className="bg-zinc-800 text-zinc-300 font-mono text-xs border-zinc-700">
+                                    {formatTime(activeTimelineSnapshot.timestamp)}
+                                </Badge>
+                            )}
+                            {activeTimelineSnapshot?.appName && (
+                                <Badge className="bg-primary/20 text-primary-foreground border-primary/30 text-xs">
+                                    {activeTimelineSnapshot.appName}
+                                </Badge>
+                            )}
+                        </div>
+
+                        <div className="flex items-center gap-3">
+                            <span className="text-xs font-mono text-zinc-400">
+                                {chronologicalSnapshots.length > 0 ? `${timelineIndex + 1} / ${chronologicalSnapshots.length} 帧` : '无记录'}
+                            </span>
+                            <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-7 text-xs text-zinc-400 hover:text-white hover:bg-zinc-800 px-2"
+                                onClick={() => {
+                                    setShowTimeline(false)
+                                    setIsPlaying(false)
+                                }}
+                            >
+                                关闭 (Esc)
+                            </Button>
+                        </div>
+                    </div>
+
+                    {/* 居中实时画面区 */}
+                    <div className="flex-1 min-h-0 relative flex items-center justify-center p-4 bg-black/95 group overflow-hidden">
+                        {/* 背景微模糊 */}
+                        {activeTimelineSnapshot?.thumbPath && (
+                            <SnapshotImage
+                                path={activeTimelineSnapshot.thumbPath}
+                                className="absolute inset-0 w-full h-full object-cover blur-3xl opacity-20 scale-110 pointer-events-none"
+                            />
+                        )}
+
+                        {/* 左右单帧快速步进按钮 */}
+                        <Button
+                            variant="ghost"
+                            size="icon"
+                            disabled={timelineIndex <= 0}
+                            className="absolute left-4 top-1/2 -translate-y-1/2 text-white/70 hover:text-white bg-black/40 hover:bg-black/70 disabled:opacity-20 rounded-full h-10 w-10 z-20 transition-all"
+                            onClick={() => {
+                                setIsPlaying(false)
+                                setTimelineIndex(prev => Math.max(0, prev - 1))
+                            }}
+                            title="上一帧 (←)"
+                        >
+                            <ChevronLeft className="h-6 w-6" />
+                        </Button>
+
+                        <Button
+                            variant="ghost"
+                            size="icon"
+                            disabled={timelineIndex >= chronologicalSnapshots.length - 1}
+                            className="absolute right-4 top-1/2 -translate-y-1/2 text-white/70 hover:text-white bg-black/40 hover:bg-black/70 disabled:opacity-20 rounded-full h-10 w-10 z-20 transition-all"
+                            onClick={() => {
+                                setIsPlaying(false)
+                                setTimelineIndex(prev => Math.min(chronologicalSnapshots.length - 1, prev + 1))
+                            }}
+                            title="下一帧 (→)"
+                        >
+                            <ChevronRight className="h-6 w-6" />
+                        </Button>
+
+                        {/* 实时画面 */}
+                        {activeTimelineSnapshot ? (
+                            <SnapshotImage
+                                path={activeTimelineSnapshot.fullPath ?? activeTimelineSnapshot.thumbPath}
+                                className="max-w-full max-h-full object-contain shadow-2xl rounded-sm"
+                            />
+                        ) : (
+                            <div className="flex flex-col items-center justify-center text-zinc-500 gap-2">
+                                <ImageIcon className="h-12 w-12 opacity-30" />
+                                <span className="text-sm">暂无当前时间画面</span>
+                            </div>
+                        )}
+                    </div>
+
+                    {/* 底部实时时间轴拖动与交互控制区 */}
+                    <div className="shrink-0 bg-zinc-900/95 backdrop-blur border-t border-zinc-800/80 px-6 py-4 space-y-3 z-30">
+                        {/* 控制行与应用信息 */}
+                        <div className="flex items-center justify-between gap-4">
+                            <div className="flex items-center gap-3">
+                                {/* 播放/暂停 */}
+                                <Button
+                                    size="sm"
+                                    variant="outline"
+                                    onClick={() => setIsPlaying(!isPlaying)}
+                                    className="h-8 px-3 rounded-lg border-zinc-700 bg-zinc-800 text-zinc-100 hover:text-white hover:bg-zinc-700 gap-1.5 text-xs font-medium"
+                                    title={isPlaying ? '暂停回放' : '自动回放 (空格键)'}
+                                >
+                                    {isPlaying ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5 fill-current" />}
+                                    {isPlaying ? '暂停' : '播放'}
+                                </Button>
+
+                                <div className="h-4 w-px bg-zinc-800" />
+
+                                {/* 时间戳实时呈现 */}
+                                <span className="font-mono text-base font-bold text-white tracking-wide">
+                                    {activeTimelineSnapshot ? formatTime(activeTimelineSnapshot.timestamp) : '--:--:--'}
+                                </span>
+
+                                {activeTimelineSnapshot && (
+                                    <span className="text-xs text-zinc-400">
+                                        {getRelativeTime(activeTimelineSnapshot.timestamp)}
+                                    </span>
+                                )}
+                            </div>
+
+                            {/* 窗口标题及快捷键说明 */}
+                            <div className="flex items-center gap-3 overflow-hidden">
+                                {activeTimelineSnapshot?.windowTitle && (
+                                    <span
+                                        className="text-xs text-zinc-300 truncate max-w-lg font-normal drop-shadow-sm"
+                                        title={activeTimelineSnapshot.windowTitle}
+                                    >
+                                        {activeTimelineSnapshot.windowTitle}
+                                    </span>
+                                )}
+                                <span className="text-[11px] text-zinc-500 hidden lg:inline shrink-0 font-mono">
+                                    拖动滑块实时定位 · 方向键微调 · 空格播放
+                                </span>
+                            </div>
+                        </div>
+
+                        {/* 实时时间滑块 Scrubber */}
+                        <div className="space-y-1.5 pt-1">
+                            <Slider
+                                value={[timelineIndex]}
+                                min={0}
+                                max={Math.max(0, chronologicalSnapshots.length - 1)}
+                                step={1}
+                                onValueChange={vals => {
+                                    setIsPlaying(false)
+                                    setTimelineIndex(vals[0])
+                                }}
+                                className="cursor-pointer py-1.5"
+                            />
+                            <div className="flex justify-between text-[11px] font-mono text-zinc-500 px-0.5">
+                                <span>
+                                    {chronologicalSnapshots.length > 0
+                                        ? formatTime(chronologicalSnapshots[0].timestamp)
+                                        : '00:00:00'}
+                                </span>
+                                <span className="text-zinc-400">
+                                    {activeTimelineSnapshot ? formatTime(activeTimelineSnapshot.timestamp) : ''}
+                                </span>
+                                <span>
+                                    {chronologicalSnapshots.length > 0
+                                        ? formatTime(chronologicalSnapshots[chronologicalSnapshots.length - 1].timestamp)
+                                        : '23:59:59'}
+                                </span>
+                            </div>
+                        </div>
+                    </div>
                 </DialogContent>
             </Dialog>
 

@@ -190,6 +190,9 @@ enum RecallCommands {
         /// Max number of snapshots to return (default: 20)
         #[arg(short, long, default_value_t = 20)]
         limit: i64,
+        /// Offset for pagination (default: 0)
+        #[arg(short, long, default_value_t = 0)]
+        offset: i64,
     },
 }
 
@@ -450,11 +453,11 @@ fn main() {
         },
 
         Commands::Recall(recall) => match recall.command {
-            RecallCommands::Query { limit } => {
+            RecallCommands::Query { limit, offset } => {
                 let user_data = get_user_data_dir();
                 let now = activity_tracker::now_ms();
                 let start = now - 7 * 86400 * 1000; // last 7 days
-                let snapshots = visual_recall::db_query_by_time_range(&user_data, start, now, limit);
+                let snapshots = visual_recall::db_query_by_time_range(&user_data, start, now, limit, offset);
                 output_json(&snapshots, compact);
             }
         },

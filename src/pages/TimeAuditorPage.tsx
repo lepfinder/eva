@@ -5,7 +5,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { getActiveAiConfig } from '@/components/AiProviderSettings'
-import { RefreshCw, Clock, Monitor, TrendingUp, Sparkles, FolderOpen, FileText, CalendarDays, SearchX, Play, List, EyeOff, ChevronRight, Calendar, ChevronLeft, Code2, Terminal, BookOpen, MessageSquare, PenLine, Palette, Gamepad2, Zap, Globe, Minus, Pause, Moon, Pin, HelpCircle, Receipt, type LucideIcon } from 'lucide-react'
+import { RefreshCw, Clock, Monitor, TrendingUp, Sparkles, FolderOpen, FileText, CalendarDays, SearchX, Play, List, EyeOff, ChevronRight, Calendar, ChevronLeft, Code2, Terminal, BookOpen, MessageSquare, PenLine, Palette, Gamepad2, Zap, Globe, Minus, Pause, Moon, Pin, HelpCircle, Receipt, Coffee, Tag, type LucideIcon } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, Legend } from 'recharts'
@@ -19,6 +19,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { Input } from '@/components/ui/input'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { DateNavigator } from '@/components/ui/date-picker'
+import { AppCategoryManagerModal } from '@/components/AppCategoryManagerModal'
 
 // 类型定义
 interface ActivityLog {
@@ -80,6 +81,7 @@ const CATEGORY_CONFIG: Record<string, { name: string; icon: string; IconComponen
     browsing:      { name: '浏览',  icon: '🌐', IconComponent: Globe,         color: '#06b6d4' },
     distracted:    { name: '走神',  icon: '😶', IconComponent: Minus,         color: '#64748b' },
     system:        { name: '系统',  icon: '⏸️', IconComponent: Pause,         color: '#9ca3af' },
+    away:          { name: '工间离席', icon: '☕️', IconComponent: Coffee,        color: '#f59e0b' },
     offline:       { name: '离线',  icon: '🌙', IconComponent: Moon,          color: '#6b7280' },
     other:         { name: '其他',  icon: '📌', IconComponent: Pin,           color: '#94a3b8' },
     unclassified:  { name: '未分类', icon: '❓', IconComponent: HelpCircle,   color: '#cbd5e1' },
@@ -341,6 +343,7 @@ export function TimeAuditorPage() {
     const [remarkEdits, setRemarkEdits] = useState<Record<string, string>>({})
     const [activityFilter, setActivityFilter] = useState('')
     const [categoryFilter, setCategoryFilter] = useState<string>('all')
+    const [categoryManagerOpen, setCategoryManagerOpen] = useState(false)
 
     // 视觉回溯状态
     const [visualRecallEnabled, setVisualRecallEnabled] = useState(false)
@@ -506,6 +509,179 @@ ${lines}`
         }
     }, [loadData])
 
+    // 时间轴数据处理：分析真实活动与空白时段（工间离席 Away 与 离线休眠 Offline）
+    const { timelineData, awayStats } = useMemo(() => {
+        if (logs.length === 0) {
+            return {
+                timelineData: [],
+                awayStats: { totalDuration: 0, count: 0 }
+            }
+        }
+
+        // 按时间正序排列
+        const sortedLogs = [...logs].sort((a, b) => a.startTime - b.startTime)
+
+        // 真实屏幕活动块
+        const activeBlocks = sortedLogs.map(log => ({
+            startTime: log.startTime,
+            endTime: log.endTime,
+            category: log.category || 'unclassified',
+            appName: log.appName,
+            windowTitle: log.windowTitle,
+            duration: log.duration,
+            isGap: false as const
+        }))
+
+        // 计算当天的时段界限
+        const dayStartMs = new Date(selectedDate + 'T00:00:00').getTime()
+        const dayEndMs = dayStartMs + 24 * 3600 * 1000
+        const now = Date.now()
+        const isToday = new Date().toDateString() === new Date(selectedDate + 'T00:00:00').toDateString()
+        const effectiveEndMs = isToday ? Math.min(now, dayEndMs) : dayEndMs
+
+        const gapBlocks: Array<{
+            startTime: number
+            endTime: number
+            category: 'away' | 'offline'
+            appName: string
+            windowTitle: string
+            duration: number
+            isGap: true
+        }> = []
+
+        let awayDurationSum = 0
+        let awayCount = 0
+
+        // 辅助分类函数：根据 gap 的时段与长度判定是工间离席还是离线休眠
+        const classifyGap = (gapStart: number, gapEnd: number) => {
+            const durationSec = Math.round((gapEnd - gapStart) / 1000)
+            if (durationSec < 600) return null // 小于10分钟忽略
+
+            const startHour = new Date(gapStart).getHours()
+            const endHour = new Date(gapEnd).getHours()
+
+            // 1. 夜间睡眠判定：跨越凌晨（如 23:00~07:00）且持续超过 1 小时
+            const isNight = (startHour >= 23 || startHour < 6) && (endHour <= 9 || gapEnd - gapStart > 4 * 3600 * 1000)
+            if (isNight && durationSec >= 3600) {
+                return {
+                    category: 'offline' as const,
+                    appName: '设备离线',
+                    windowTitle: '夜间睡眠 / 休眠'
+                }
+            }
+
+            // 2. 超长离线（持续超过 3.5 小时）判定为离线/外出未开机
+            if (durationSec > 3.5 * 3600) {
+                return {
+                    category: 'offline' as const,
+                    appName: '设备离线',
+                    windowTitle: '长时离线 / 未使用'
+                }
+            }
+
+            // 3. 正常工间离席（10分钟 ~ 3.5小时的白天/晚间空白）
+            let title = '息屏 / 离开工位'
+            if (startHour >= 11 && startHour <= 13) {
+                title = '午间用餐 / 休息'
+            } else if (startHour >= 17 && startHour <= 19) {
+                title = '傍晚用餐 / 休息'
+            }
+
+            return {
+                category: 'away' as const,
+                appName: '工间离席',
+                windowTitle: title
+            }
+        }
+
+        // 1. 检查当天第一个活动之前的空白
+        const firstLogStart = sortedLogs[0].startTime
+        if (firstLogStart > dayStartMs + 10 * 60 * 1000) {
+            const dur = Math.round((firstLogStart - dayStartMs) / 1000)
+            gapBlocks.push({
+                startTime: dayStartMs,
+                endTime: firstLogStart,
+                category: 'offline',
+                appName: '设备离线',
+                windowTitle: '开机前离线 / 休眠',
+                duration: dur,
+                isGap: true
+            })
+        }
+
+        // 2. 检查活动与活动之间的空白 (gaps)
+        let curEnd = sortedLogs[0].endTime
+        for (let i = 1; i < sortedLogs.length; i++) {
+            const nextLog = sortedLogs[i]
+            if (nextLog.startTime > curEnd + 10 * 60 * 1000) {
+                const classification = classifyGap(curEnd, nextLog.startTime)
+                if (classification) {
+                    const dur = Math.round((nextLog.startTime - curEnd) / 1000)
+                    gapBlocks.push({
+                        startTime: curEnd,
+                        endTime: nextLog.startTime,
+                        category: classification.category,
+                        appName: classification.appName,
+                        windowTitle: classification.windowTitle,
+                        duration: dur,
+                        isGap: true
+                    })
+
+                    if (classification.category === 'away') {
+                        awayDurationSum += dur
+                        awayCount += 1
+                    }
+                }
+            }
+            if (nextLog.endTime > curEnd) {
+                curEnd = nextLog.endTime
+            }
+        }
+
+        // 3. 检查最后一个活动到当天界限的空白
+        if (effectiveEndMs > curEnd + 10 * 60 * 1000) {
+            const classification = classifyGap(curEnd, effectiveEndMs)
+            const dur = Math.round((effectiveEndMs - curEnd) / 1000)
+            if (classification) {
+                gapBlocks.push({
+                    startTime: curEnd,
+                    endTime: effectiveEndMs,
+                    category: classification.category,
+                    appName: classification.appName,
+                    windowTitle: isToday ? `${classification.windowTitle} (进行中)` : classification.windowTitle,
+                    duration: dur,
+                    isGap: true
+                })
+
+                if (classification.category === 'away') {
+                    awayDurationSum += dur
+                    awayCount += 1
+                }
+            } else {
+                gapBlocks.push({
+                    startTime: curEnd,
+                    endTime: effectiveEndMs,
+                    category: 'offline',
+                    appName: '设备离线',
+                    windowTitle: isToday ? '当前离线' : '下班离线',
+                    duration: dur,
+                    isGap: true
+                })
+            }
+        }
+
+        // 合并所有时间块并按起始时间排序
+        const allBlocks = [...activeBlocks, ...gapBlocks].sort((a, b) => a.startTime - b.startTime)
+
+        return {
+            timelineData: allBlocks,
+            awayStats: {
+                totalDuration: awayDurationSum,
+                count: awayCount
+            }
+        }
+    }, [logs, selectedDate])
+
     // AI 生成总结
     const handleGenerateSummary = useCallback(async () => {
         try {
@@ -514,16 +690,21 @@ ${lines}`
             // 先从 Rust 拿统计数据
             const rawSummary = await invoke<string>('activity_generate_summary', { date: selectedDate })
 
+            let contextAddon = ''
+            if (awayStats.totalDuration > 0) {
+                contextAddon = `\n此外，该用户今日工间离席/用餐休息共 ${awayStats.count} 次，总计约 ${formatDuration(awayStats.totalDuration)}。`
+            }
+
             // 检查是否有 AI 配置
             const aiCfg = getActiveAiConfig()
             if (!aiCfg) {
                 // 没有配置 AI，直接展示统计数据
-                setSummary(rawSummary + '\n\n> 💡 在「设置 → AI 供应商」配置 API Key 后，可获得 AI 智能分析总结。')
+                setSummary(rawSummary + contextAddon + '\n\n> 💡 在「设置 → AI 供应商」配置 API Key 后，可获得 AI 智能分析总结。')
                 return
             }
 
             // 用 AI 总结
-            const prompt = `以下是我今天（${selectedDate}）的电脑使用活动统计数据：\n\n${rawSummary}\n\n请根据这些数据，用中文给我一个简洁友好的工作日总结，包括：\n1. 今天主要做了什么\n2. 时间利用的亮点或问题\n3. 一条具体的改进建议\n保持简短，不超过 150 字。`
+            const prompt = `以下是我今天（${selectedDate}）的电脑使用活动统计数据：\n\n${rawSummary}${contextAddon}\n\n请根据这些数据，用中文给我一个简洁友好的工作日总结，包括：\n1. 今天主要做了什么\n2. 时间利用与劳逸结合情况（包括屏幕专注时长与工间休息）\n3. 一条具体的改进建议\n保持简短，不超过 150 字。`
 
             const data = await window.api.ai.chatCompletion({
                 baseUrl: aiCfg.config.baseUrl,
@@ -541,7 +722,7 @@ ${lines}`
         } finally {
             setGeneratingSummary(false)
         }
-    }, [selectedDate])
+    }, [selectedDate, awayStats])
 
     // 初始加载
     useEffect(() => {
@@ -550,33 +731,6 @@ ${lines}`
         const interval = setInterval(loadData, 60000)
         return () => clearInterval(interval)
     }, [loadData])
-
-    // 时间轴数据处理
-    const timelineData = useMemo(() => {
-        // 将日志合并为连续的时间块
-        if (logs.length === 0) return []
-
-
-
-        // 按时间正序排列
-        const sortedLogs = [...logs].sort((a, b) => a.startTime - b.startTime)
-
-
-
-        // 简化的合并逻辑：相同分类且间隔很短的合并
-        // 这里为了简单展示，直接使用原始 log，但在渲染时处理宽度
-        // 实际上，为了这展示效果，我们应该按分钟/小时聚合
-
-        // 简单映射 log 到 timeline 块
-        return sortedLogs.map(log => ({
-            startTime: log.startTime,
-            endTime: log.endTime,
-            category: log.category || 'unclassified',
-            appName: log.appName,
-            windowTitle: log.windowTitle,
-            duration: log.duration
-        }))
-    }, [logs])
 
     // 计算时间轴范围（显示最早活动到现在的范围，或者固定 0-24即 Today）
     // 为了更直观，我们显示 00:00 到 24:00
@@ -645,50 +799,304 @@ ${lines}`
 
             {/* 内容区域 */}
             <div className="flex-1 overflow-auto py-4">
-                {/* 生产力热力图 */}
-                <ProductivityHeatmap
-                    selectedDate={selectedDate}
-                    onDateSelect={setSelectedDate}
-                />
-
                 {/* 统计卡片 */}
-                <div className="grid grid-cols-3 gap-4 mb-6">
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
                     <Card>
                         <CardHeader className="pb-2">
                             <CardTitle className="text-sm font-medium text-zinc-500 flex items-center gap-2">
-                                <Clock className="h-4 w-4" />
-                                今日总时长
+                                <Clock className="h-4 w-4 text-violet-500" />
+                                屏幕活跃时长
                             </CardTitle>
                         </CardHeader>
                         <CardContent>
                             <p className="text-2xl font-bold">{formatDuration(totalDuration)}</p>
+                            <p className="text-xs text-zinc-400 mt-1">键盘鼠标操作与前台活跃</p>
                         </CardContent>
                     </Card>
 
                     <Card>
                         <CardHeader className="pb-2">
                             <CardTitle className="text-sm font-medium text-zinc-500 flex items-center gap-2">
-                                <Monitor className="h-4 w-4" />
+                                <Coffee className="h-4 w-4 text-amber-500" />
+                                工间休息 / 离席
+                            </CardTitle>
+                        </CardHeader>
+                        <CardContent>
+                            <p className="text-2xl font-bold text-amber-600 dark:text-amber-400">
+                                {formatDuration(awayStats.totalDuration)}
+                            </p>
+                            <p className="text-xs text-zinc-400 mt-1">
+                                {awayStats.count > 0 ? `离席 ${awayStats.count} 次 (用餐/活动休息)` : '全天无长离席'}
+                            </p>
+                        </CardContent>
+                    </Card>
+
+                    <Card>
+                        <CardHeader className="pb-2">
+                            <CardTitle className="text-sm font-medium text-zinc-500 flex items-center gap-2">
+                                <Monitor className="h-4 w-4 text-blue-500" />
                                 使用应用数
                             </CardTitle>
                         </CardHeader>
                         <CardContent>
                             <p className="text-2xl font-bold">{appCount} 个</p>
+                            <p className="text-xs text-zinc-400 mt-1">前台交互应用集合</p>
                         </CardContent>
                     </Card>
 
                     <Card>
                         <CardHeader className="pb-2">
                             <CardTitle className="text-sm font-medium text-zinc-500 flex items-center gap-2">
-                                <TrendingUp className="h-4 w-4" />
+                                <TrendingUp className="h-4 w-4 text-emerald-500" />
                                 活动记录数
                             </CardTitle>
                         </CardHeader>
                         <CardContent>
                             <p className="text-2xl font-bold">{totalCount} 条</p>
+                            <p className="text-xs text-zinc-400 mt-1">窗口焦点切换会话</p>
                         </CardContent>
                     </Card>
                 </div>
+
+                {/* 今日活动时间轴（上提为核心视图主角） */}
+                <Card className="mb-6">
+                    <CardHeader>
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                            <CardTitle className="text-base flex items-center gap-2">
+                                <CalendarDays className="h-4 w-4 text-violet-500" />
+                                今日活动时间轴
+                            </CardTitle>
+                            <div className="flex items-center gap-3 text-xs text-zinc-500 font-medium">
+                                <span className="flex items-center gap-1.5">
+                                    <span className="w-2.5 h-2.5 rounded-sm bg-violet-500" />
+                                    屏幕活跃
+                                </span>
+                                <span className="flex items-center gap-1.5">
+                                    <span className="w-2.5 h-2.5 rounded-sm bg-amber-400/30 border border-dashed border-amber-500" />
+                                    工间离席 ({formatDuration(awayStats.totalDuration)})
+                                </span>
+                                <span className="flex items-center gap-1.5">
+                                    <span className="w-2.5 h-2.5 rounded-sm bg-zinc-300 dark:bg-zinc-700" />
+                                    离线休眠
+                                </span>
+                            </div>
+                        </div>
+                    </CardHeader>
+                    <CardContent className="relative space-y-4">
+                        {/* 缩放控制器 */}
+                        <div className="flex items-center gap-4 bg-zinc-50 dark:bg-zinc-900/50 p-2 rounded-lg border border-dashed">
+                            <div className="flex items-center gap-2 text-xs text-zinc-500 min-w-fit">
+                                <SearchX className="h-3 w-3" />
+                                视图范围
+                            </div>
+                            <Slider
+                                value={viewRange}
+                                onValueChange={(val) => setViewRange(val as [number, number])}
+                                max={100}
+                                step={0.1}
+                                minStepsBetweenThumbs={1}
+                                className="flex-1"
+                            />
+                            <div className="flex items-center gap-1">
+                                <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    className="h-7 text-[10px]"
+                                    onClick={() => setViewRange([0, 100])}
+                                >
+                                    重置
+                                </Button>
+                            </div>
+                        </div>
+
+                        {/* 时间轴可视化 */}
+                        <div className="relative h-24 w-full bg-zinc-100 dark:bg-zinc-800 rounded-xl overflow-hidden shadow-inner flex items-center px-1">
+                            {timelineData.map((block, index) => {
+                                const startOfDay = new Date(block.startTime).setHours(0, 0, 0, 0)
+                                const relativeStart = (block.startTime - startOfDay) / 1000
+                                const originalLeft = (relativeStart / totalDaySeconds) * 100
+                                const originalWidth = (block.duration / totalDaySeconds) * 100
+
+                                // 根据 viewRange 重新计算
+                                const zoomFactor = 100 / (viewRange[1] - viewRange[0])
+                                const left = (originalLeft - viewRange[0]) * zoomFactor
+                                const width = originalWidth * zoomFactor
+
+                                // 仅渲染可见区域内的块
+                                if (left + width < 0 || left > 100) return null
+                                if (width < 0.01) return null // 过滤极小块提高性能
+
+                                const config = CATEGORY_CONFIG[block.category] || CATEGORY_CONFIG.other
+                                const color = getAppColor(block.appName, block.category)
+                                const isAway = block.category === 'away'
+                                const isOffline = block.category === 'offline'
+
+                                return (
+                                    <div
+                                        key={block.startTime + '-' + index}
+                                        className={`absolute top-2 bottom-2 rounded-[2px] transition-all cursor-crosshair ${
+                                            isAway
+                                                ? 'z-10 hover:z-50 hover:scale-y-105'
+                                                : isOffline
+                                                ? 'z-0 opacity-40 hover:opacity-80 hover:z-50'
+                                                : 'mix-blend-multiply dark:mix-blend-screen hover:z-50 hover:scale-y-110'
+                                        }`}
+                                        style={{
+                                            left: `${left}%`,
+                                            width: `${width}%`,
+                                            backgroundColor: isAway
+                                                ? 'rgba(245, 158, 11, 0.22)'
+                                                : isOffline
+                                                ? 'rgba(148, 163, 184, 0.15)'
+                                                : color,
+                                            backgroundImage: isAway
+                                                ? 'repeating-linear-gradient(45deg, rgba(245, 158, 11, 0.35), rgba(245, 158, 11, 0.35) 2px, transparent 2px, transparent 6px)'
+                                                : undefined,
+                                            border: isAway ? '1px dashed rgba(245, 158, 11, 0.6)' : undefined,
+                                            opacity: isOffline ? 0.35 : 0.95,
+                                        }}
+                                        onMouseEnter={(e) => {
+                                            setHoveredBlock({ ...block, config, color })
+                                            setHoverPos({ x: e.clientX, y: e.clientY })
+
+                                            // 仅对真实屏幕活动块加载缩略图（空白离席/离线不请求快照）
+                                            if (!block.isGap && visualRecallEnabled && window.api.visualRecall) {
+                                                setLoadingThumbnail(true)
+                                                setHoverThumbnail(null)
+                                                window.api.visualRecall.searchSnapshots({
+                                                    startTime: block.startTime - 5000,
+                                                    endTime: block.endTime + 5000,
+                                                    limit: 1
+                                                }).then(res => {
+                                                    if (res.snapshots && res.snapshots.length > 0) {
+                                                        const snapshot = res.snapshots[0]
+                                                        if (snapshot.has_image && snapshot.imageUrl) {
+                                                            setHoverThumbnail(snapshot.imageUrl)
+                                                        }
+                                                    }
+                                                }).finally(() => {
+                                                    setLoadingThumbnail(false)
+                                                })
+                                            } else {
+                                                setHoverThumbnail(null)
+                                            }
+                                        }}
+                                        onMouseMove={(e) => {
+                                            setHoverPos({ x: e.clientX, y: e.clientY })
+                                        }}
+                                        onMouseLeave={() => {
+                                            setHoveredBlock(null)
+                                            setHoverThumbnail(null)
+                                        }}
+                                    />
+                                )
+                            })}
+                        </div>
+
+                        {/* 动态时间刻度 */}
+                        <div className="flex justify-between text-[10px] tabular-nums text-zinc-400 px-1 font-medium">
+                            {Array.from({ length: 9 }).map((_, i) => {
+                                const percent = viewRange[0] + (i / 8) * (viewRange[1] - viewRange[0])
+                                const seconds = (percent / 100) * 24 * 3600
+                                const h = Math.floor(seconds / 3600)
+                                const m = Math.floor((seconds % 3600) / 60)
+                                return (
+                                    <span key={i}>
+                                        {String(h).padStart(2, '0')}:{String(m).padStart(2, '0')}
+                                    </span>
+                                )
+                            })}
+                        </div>
+
+                        {/* 即时显示的浮动提示层 */}
+                        {hoveredBlock && (() => {
+                            const tooltipWidth = 280
+                            const windowWidth = window.innerWidth
+                            const isNearRightEdge = hoverPos.x + tooltipWidth + 40 > windowWidth
+                            const left = isNearRightEdge
+                                ? hoverPos.x - tooltipWidth - 20
+                                : hoverPos.x + 20
+
+                            const isAwayBlock = hoveredBlock.category === 'away'
+                            const isOfflineBlock = hoveredBlock.category === 'offline'
+
+                            return (
+                                <div
+                                    className="fixed z-[100] pointer-events-none bg-white/95 dark:bg-zinc-900/95 backdrop-blur-md border rounded-xl shadow-2xl p-4 min-w-[240px] max-w-[280px] animate-in fade-in zoom-in duration-150"
+                                    style={{
+                                        left,
+                                        top: hoverPos.y + 20
+                                    }}
+                                >
+                                    <div className="flex items-center gap-2 mb-3">
+                                        <span className="flex items-center justify-center w-7 h-7 rounded-lg" style={{ backgroundColor: hoveredBlock.color + '20', color: hoveredBlock.color }}>
+                                            <hoveredBlock.config.IconComponent className="h-4 w-4" />
+                                        </span>
+                                        <span
+                                            className="px-3 py-1 rounded-full text-[10px] font-bold text-white uppercase tracking-wider"
+                                            style={{ backgroundColor: hoveredBlock.color }}
+                                        >
+                                            {hoveredBlock.config.name}
+                                        </span>
+                                    </div>
+                                    <p className="font-bold text-sm text-zinc-900 dark:text-zinc-100 mb-1 leading-tight">{hoveredBlock.appName}</p>
+                                    <p className="text-xs text-zinc-500 mb-4 line-clamp-2 max-w-[280px]">{hoveredBlock.windowTitle}</p>
+
+                                    {/* 空白离席 / 离线特别卡片 */}
+                                    {isAwayBlock ? (
+                                        <div className="mb-4 bg-amber-500/10 border border-amber-500/20 rounded-lg p-2.5 flex items-center gap-2 text-amber-800 dark:text-amber-200">
+                                            <Coffee className="h-4 w-4 text-amber-500 shrink-0" />
+                                            <div className="text-[11px] leading-tight">
+                                                <p className="font-semibold">工间离开工位</p>
+                                                <p className="text-[10px] text-zinc-500 dark:text-zinc-400 mt-0.5">息屏锁屏 / 用餐或小憩</p>
+                                            </div>
+                                        </div>
+                                    ) : isOfflineBlock ? (
+                                        <div className="mb-4 bg-zinc-100 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700/60 rounded-lg p-2.5 flex items-center gap-2 text-zinc-700 dark:text-zinc-300">
+                                            <Moon className="h-4 w-4 text-zinc-400 shrink-0" />
+                                            <div className="text-[11px] leading-tight">
+                                                <p className="font-semibold">系统离线 / 休眠</p>
+                                                <p className="text-[10px] text-zinc-500 mt-0.5">长时未活跃或夜间睡眠</p>
+                                            </div>
+                                        </div>
+                                    ) : (
+                                        visualRecallEnabled && (
+                                            <div className="mb-4 bg-zinc-100 dark:bg-zinc-800 rounded-lg overflow-hidden h-32 flex items-center justify-center relative">
+                                                {loadingThumbnail ? (
+                                                    <RefreshCw className="h-5 w-5 text-zinc-400 animate-spin" />
+                                                ) : hoverThumbnail ? (
+                                                    <img
+                                                        src={hoverThumbnail}
+                                                        className="w-full h-full object-cover"
+                                                        alt="Snapshot"
+                                                        onError={(e) => {
+                                                            (e.target as HTMLImageElement).style.display = 'none'
+                                                        }}
+                                                    />
+                                                ) : (
+                                                    <div className="flex flex-col items-center justify-center text-zinc-400 gap-1">
+                                                        <EyeOff className="h-5 w-5" />
+                                                        <span className="text-[10px]">无视觉记录</span>
+                                                    </div>
+                                                )}
+                                            </div>
+                                        )
+                                    )}
+
+                                    <div className="flex justify-between items-center text-[10px] font-bold text-zinc-400 border-t border-zinc-100 dark:border-zinc-800 pt-3">
+                                        <div className="flex items-center gap-1">
+                                            <Clock className="h-3 w-3" />
+                                            {formatTime(hoveredBlock.startTime)} - {formatTime(hoveredBlock.endTime)}
+                                        </div>
+                                        <div className="text-primary bg-primary/10 px-2 py-1 rounded">
+                                            {formatDuration(hoveredBlock.duration)}
+                                        </div>
+                                    </div>
+                                </div>
+                            )
+                        })()}
+                    </CardContent>
+                </Card>
 
                 {loading && stats.length === 0 ? (
                     <div className="flex items-center justify-center h-60 text-zinc-500">
@@ -766,204 +1174,34 @@ ${lines}`
                     </div>
                 )}
 
-                {/* 时间轴 */}
-                <Card className="mt-6">
-                    <CardHeader>
-                        <CardTitle className="text-base flex items-center gap-2">
-                            <CalendarDays className="h-4 w-4" />
-                            今日活动时间轴
-                        </CardTitle>
-                    </CardHeader>
-                    <CardContent className="relative space-y-4">
-                        {/* 缩放控制器 */}
-                        <div className="flex items-center gap-4 bg-zinc-50 dark:bg-zinc-900/50 p-2 rounded-lg border border-dashed">
-                            <div className="flex items-center gap-2 text-xs text-zinc-500 min-w-fit">
-                                <SearchX className="h-3 w-3" />
-                                视图范围
-                            </div>
-                            <Slider
-                                value={viewRange}
-                                onValueChange={(val) => setViewRange(val as [number, number])}
-                                max={100}
-                                step={0.1}
-                                minStepsBetweenThumbs={1}
-                                className="flex-1"
-                            />
-                            <div className="flex items-center gap-1">
-                                <Button
-                                    variant="ghost"
-                                    size="sm"
-                                    className="h-7 text-[10px]"
-                                    onClick={() => setViewRange([0, 100])}
-                                >
-                                    重置
-                                </Button>
-                            </div>
-                        </div>
-
-                        {/* 时间轴可视化 */}
-                        <div className="relative h-24 w-full bg-zinc-100 dark:bg-zinc-800 rounded-xl overflow-hidden shadow-inner flex items-center px-1">
-                            {timelineData.map((block, index) => {
-                                const startOfDay = new Date(block.startTime).setHours(0, 0, 0, 0)
-                                const relativeStart = (block.startTime - startOfDay) / 1000
-                                const originalLeft = (relativeStart / totalDaySeconds) * 100
-                                const originalWidth = (block.duration / totalDaySeconds) * 100
-
-                                // 根据 viewRange 重新计算
-                                const zoomFactor = 100 / (viewRange[1] - viewRange[0])
-                                const left = (originalLeft - viewRange[0]) * zoomFactor
-                                const width = originalWidth * zoomFactor
-
-                                // 仅渲染可见区域内的块
-                                if (left + width < 0 || left > 100) return null
-                                if (width < 0.01) return null // 过滤极小块提高性能
-
-                                const config = CATEGORY_CONFIG[block.category] || CATEGORY_CONFIG.other
-                                const color = getAppColor(block.appName, block.category)
-
-                                return (
-                                    <div
-                                        key={block.startTime + '-' + index}
-                                        className="absolute top-2 bottom-2 rounded-[2px] transition-all cursor-crosshair mix-blend-multiply dark:mix-blend-screen hover:z-50 hover:scale-y-110"
-                                        style={{
-                                            left: `${left}%`,
-                                            width: `${width}%`,
-                                            backgroundColor: color,
-                                            opacity: 0.9,
-                                        }}
-                                        onMouseEnter={(e) => {
-                                            setHoveredBlock({ ...block, config, color })
-                                            setHoverPos({ x: e.clientX, y: e.clientY })
-
-                                            // 加载缩略图
-                                            if (visualRecallEnabled && window.api.visualRecall) {
-                                                setLoadingThumbnail(true)
-                                                setHoverThumbnail(null)
-                                                // 查找该时间段内的快照
-                                                // 稍微扩大一点搜索范围 (+- 5秒)
-                                                window.api.visualRecall.searchSnapshots({
-                                                    startTime: block.startTime - 5000,
-                                                    endTime: block.endTime + 5000,
-                                                    limit: 1
-                                                }).then(res => {
-                                                    if (res.snapshots && res.snapshots.length > 0) {
-                                                        const snapshot = res.snapshots[0]
-                                                        if (snapshot.has_image) {
-                                                            // searchSnapshots 的 IPC 返回值里带上 base URL 或者完整 Image URL。
-                                                            // main/index.ts 已经处理了 imageUrl 的注入
-                                                            if (snapshot.imageUrl) {
-                                                                setHoverThumbnail(snapshot.imageUrl)
-                                                            }
-                                                        }
-                                                    }
-                                                }).finally(() => {
-                                                    setLoadingThumbnail(false)
-                                                })
-                                            }
-                                        }}
-                                        onMouseMove={(e) => {
-                                            setHoverPos({ x: e.clientX, y: e.clientY })
-                                        }}
-                                        onMouseLeave={() => {
-                                            setHoveredBlock(null)
-                                            setHoverThumbnail(null)
-                                        }}
-                                    />
-                                )
-                            })}
-                        </div>
-
-                        {/* 动态时间刻度 */}
-                        <div className="flex justify-between text-[10px] tabular-nums text-zinc-400 px-1 font-medium">
-                            {Array.from({ length: 9 }).map((_, i) => {
-                                const percent = viewRange[0] + (i / 8) * (viewRange[1] - viewRange[0])
-                                const seconds = (percent / 100) * 24 * 3600
-                                const h = Math.floor(seconds / 3600)
-                                const m = Math.floor((seconds % 3600) / 60)
-                                return (
-                                    <span key={i}>
-                                        {String(h).padStart(2, '0')}:{String(m).padStart(2, '0')}
-                                    </span>
-                                )
-                            })}
-                        </div>
-
-                        {/* 即时显示的浮动提示层 */}
-                        {hoveredBlock && (() => {
-                            // 计算 tooltip 位置，避免超出右边界
-                            const tooltipWidth = 280 // 预估 tooltip 宽度
-                            const windowWidth = window.innerWidth
-                            const isNearRightEdge = hoverPos.x + tooltipWidth + 40 > windowWidth
-                            const left = isNearRightEdge
-                                ? hoverPos.x - tooltipWidth - 20
-                                : hoverPos.x + 20
-
-                            return (
-                                <div
-                                    className="fixed z-[100] pointer-events-none bg-white/95 dark:bg-zinc-900/95 backdrop-blur-md border rounded-xl shadow-2xl p-4 min-w-[240px] max-w-[280px] animate-in fade-in zoom-in duration-150"
-                                    style={{
-                                        left,
-                                        top: hoverPos.y + 20
-                                    }}
-                                >
-                                    <div className="flex items-center gap-2 mb-3">
-                                        <span className="flex items-center justify-center w-7 h-7 rounded-lg" style={{ backgroundColor: hoveredBlock.color + '20', color: hoveredBlock.color }}>
-                                            <hoveredBlock.config.IconComponent className="h-4 w-4" />
-                                        </span>
-                                        <span
-                                            className="px-3 py-1 rounded-full text-[10px] font-bold text-white uppercase tracking-wider"
-                                            style={{ backgroundColor: hoveredBlock.color }}
-                                        >
-                                            {hoveredBlock.config.name}
-                                        </span>
-                                    </div>
-                                    <p className="font-bold text-sm text-zinc-900 dark:text-zinc-100 mb-1 leading-tight">{hoveredBlock.appName}</p>
-                                    <p className="text-xs text-zinc-500 mb-4 line-clamp-2 max-w-[280px]">{hoveredBlock.windowTitle}</p>
-
-                                    {visualRecallEnabled && (
-                                        <div className="mb-4 bg-zinc-100 dark:bg-zinc-800 rounded-lg overflow-hidden h-32 flex items-center justify-center relative">
-                                            {loadingThumbnail ? (
-                                                <RefreshCw className="h-5 w-5 text-zinc-400 animate-spin" />
-                                            ) : hoverThumbnail ? (
-                                                <img
-                                                    src={hoverThumbnail}
-                                                    className="w-full h-full object-cover"
-                                                    alt="Snapshot"
-                                                    onError={(e) => {
-                                                        (e.target as HTMLImageElement).style.display = 'none'
-                                                    }}
-                                                />
-                                            ) : (
-                                                <div className="flex flex-col items-center justify-center text-zinc-400 gap-1">
-                                                    <EyeOff className="h-5 w-5" />
-                                                    <span className="text-[10px]">无视觉记录</span>
-                                                </div>
-                                            )}
-                                            {/* 遮罩显示 OCR 文本提示？暂不加 */}
-                                        </div>
-                                    )}
-
-                                    <div className="flex justify-between items-center text-[10px] font-bold text-zinc-400 border-t border-zinc-100 dark:border-zinc-800 pt-3">
-                                        <div className="flex items-center gap-1">
-                                            <Clock className="h-3 w-3" />
-                                            {formatTime(hoveredBlock.startTime)} - {formatTime(hoveredBlock.endTime)}
-                                        </div>
-                                        <div className="text-primary bg-primary/10 px-2 py-1 rounded">
-                                            {formatDuration(hoveredBlock.duration)}
-                                        </div>
-                                    </div>
-                                </div>
-                            )
-                        })()}
-                    </CardContent>
-                </Card>
+                {/* 生产力热力图（年度完整展开） */}
+                <div className="mt-6">
+                    <ProductivityHeatmap
+                        selectedDate={selectedDate}
+                        onDateSelect={setSelectedDate}
+                    />
+                </div>
                 {/* 分类统计 */}
                 {categoryStats.length > 0 && (
                     <div className="grid grid-cols-2 gap-6 mt-6">
                         {/* 分类列表 */}
                         <Card>
                             <CardHeader>
-                                <CardTitle className="text-base">按类别统计</CardTitle>
+                                <div className="flex items-center justify-between">
+                                    <CardTitle className="text-base">按类别统计</CardTitle>
+                                    <Button
+                                        variant="ghost"
+                                        size="sm"
+                                        onClick={() => setCategoryManagerOpen(true)}
+                                        className="h-7 px-2 text-xs text-zinc-500 hover:text-violet-600 hover:bg-violet-50 dark:hover:bg-violet-950/30 gap-1.5"
+                                    >
+                                        <Tag className="h-3.5 w-3.5 text-violet-500" />
+                                        <span>分类管理</span>
+                                        {categoryStats.some(c => c.category === 'other') && (
+                                            <span className="flex h-1.5 w-1.5 rounded-full bg-amber-500 animate-pulse" title="存在待分类应用" />
+                                        )}
+                                    </Button>
+                                </div>
                             </CardHeader>
                             <CardContent>
                                 <div className="space-y-3">
@@ -1007,36 +1245,65 @@ ${lines}`
                         {/* 项目列表 */}
                         <Card>
                             <CardHeader>
-                                <CardTitle className="text-base flex items-center gap-2">
-                                    <FolderOpen className="h-4 w-4" />
-                                    按项目统计
-                                </CardTitle>
+                                <div className="flex items-center justify-between">
+                                    <CardTitle className="text-base flex items-center gap-2">
+                                        <FolderOpen className="h-4 w-4 text-violet-500" />
+                                        工程项目投入
+                                    </CardTitle>
+                                    <span className="text-[11px] text-zinc-400 font-normal">
+                                        代码工作区自动聚合
+                                    </span>
+                                </div>
                             </CardHeader>
                             <CardContent>
                                 {projectStats.length > 0 ? (
                                     <div className="space-y-3">
-                                        {projectStats.map((stat, index) => (
-                                            <div key={stat.projectName} className="flex items-center gap-3">
-                                                <div
-                                                    className="w-3 h-3 rounded-full shrink-0"
-                                                    style={{ backgroundColor: COLORS[index % COLORS.length] }}
-                                                />
-                                                <div className="flex-1 min-w-0">
-                                                    <p className="font-medium truncate">{stat.projectName}</p>
-                                                    <p className="text-sm text-zinc-500">
-                                                        {formatDuration(stat.totalDuration)}
-                                                    </p>
+                                        {projectStats.map((stat, index) => {
+                                            const color = COLORS[index % COLORS.length]
+                                            return (
+                                                <div key={stat.projectName} className="flex items-center gap-3">
+                                                    <div
+                                                        className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0"
+                                                        style={{ backgroundColor: color + '20', color }}
+                                                    >
+                                                        <FolderOpen className="h-4 w-4" />
+                                                    </div>
+                                                    <div className="flex-1 min-w-0">
+                                                        <div className="flex items-center justify-between mb-1">
+                                                            <p className="font-medium truncate text-sm text-zinc-800 dark:text-zinc-200">
+                                                                {stat.projectName}
+                                                            </p>
+                                                            <span className="text-xs text-zinc-500">
+                                                                {formatDuration(stat.totalDuration)}
+                                                            </span>
+                                                        </div>
+                                                        <div className="flex items-center gap-2">
+                                                            <div className="flex-1 bg-zinc-200 dark:bg-zinc-700 rounded-full h-2">
+                                                                <div
+                                                                    className="h-2 rounded-full transition-all duration-300"
+                                                                    style={{
+                                                                        width: `${stat.percentage}%`,
+                                                                        backgroundColor: color
+                                                                    }}
+                                                                />
+                                                            </div>
+                                                            <span className="text-xs text-zinc-500 w-10 text-right">
+                                                                {stat.percentage}%
+                                                            </span>
+                                                        </div>
+                                                    </div>
                                                 </div>
-                                                <div className="text-sm font-medium text-zinc-600 dark:text-zinc-400">
-                                                    {stat.percentage}%
-                                                </div>
-                                            </div>
-                                        ))}
+                                            )
+                                        })}
                                     </div>
                                 ) : (
-                                    <p className="text-sm text-zinc-500 text-center py-4">
-                                        点击"AI 分类"按钮识别项目
-                                    </p>
+                                    <div className="flex flex-col items-center justify-center py-8 text-center">
+                                        <FolderOpen className="h-8 w-8 text-zinc-300 dark:text-zinc-600 mb-2" />
+                                        <p className="text-xs text-zinc-500">今日暂无代码工作区记录</p>
+                                        <p className="text-[10px] text-zinc-400 mt-0.5">
+                                            在 Cursor / VS Code / Antigravity 中打开代码目录将自动聚合时长
+                                        </p>
+                                    </div>
                                 )}
                             </CardContent>
                         </Card>
@@ -1179,6 +1446,13 @@ ${lines}`
                     )}
                 </DialogContent>
             </Dialog>
+
+            {/* 应用分类与规则管理弹窗 */}
+            <AppCategoryManagerModal
+                open={categoryManagerOpen}
+                onOpenChange={setCategoryManagerOpen}
+                onApplied={loadData}
+            />
         </div>
     )
 }

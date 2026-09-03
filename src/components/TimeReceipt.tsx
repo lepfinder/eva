@@ -10,6 +10,7 @@ import { Download, Copy, Check, Sparkles, RefreshCw, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogOverlay, DialogPortal } from '@/components/ui/dialog'
 import { Barcode } from '@/components/Barcode'
+import { formatDurationShort, balanceReceiptDurations } from '@/lib/receiptHelper'
 
 export interface TimeReceiptProps {
     open: boolean
@@ -19,15 +20,6 @@ export interface TimeReceiptProps {
     appStats: Array<{ appName: string; totalDuration: number; percentage: number }>
     logs?: Array<{ appName: string; windowTitle: string; startTime: number; endTime: number; duration: number }>
     summary?: string
-}
-
-// 格式化时长为英文简写（如 3h 12m）
-function formatDurationShort(seconds: number): string {
-    if (seconds < 60) return `${seconds}s`
-    const hours = Math.floor(seconds / 3600)
-    const mins = Math.floor((seconds % 3600) / 60)
-    if (hours === 0) return `${mins}m`
-    return mins > 0 ? `${hours}h ${mins}m` : `${hours}h`
 }
 
 // 生成 6 位等宽字符柱状图 (例如 ▓▓▓░░░)
@@ -71,9 +63,22 @@ export function TimeReceipt({
 
         const miscDuration = miscApps.reduce((acc, curr) => acc + curr.totalDuration, 0)
         const miscPercentage = totalDuration > 0 ? Math.round((miscDuration / totalDuration) * 100) : 0
+        const hasMisc = miscApps.length > 0
 
-        // 最大时间黑洞
-        const biggestSink = topApps[0] || null
+        // 配平展示项时长，确保各项相加 100% 精确等于小票 SUBTOTAL
+        const itemDurations = topApps.map(a => a.totalDuration)
+        if (hasMisc) {
+            itemDurations.push(miscDuration)
+        }
+        const { itemFormatted, subtotalFormatted } = balanceReceiptDurations(itemDurations, totalDuration)
+
+        const balancedTopApps = topApps.map((app, idx) => ({
+            ...app,
+            formattedDuration: itemFormatted[idx]
+        }))
+        const miscFormatted = hasMisc ? itemFormatted[itemFormatted.length - 1] : ''
+
+        const biggestSink = balancedTopApps[0] || null
 
         // 最长专注记录（单次未打断时长）
         let longestFocus: { appName: string; duration: number } | null = null
@@ -113,11 +118,13 @@ export function TimeReceipt({
         }).toUpperCase()
 
         return {
-            topApps,
-            hasMisc: miscApps.length > 0,
+            topApps: balancedTopApps,
+            hasMisc,
             miscCount: miscApps.length,
             miscDuration,
             miscPercentage,
+            miscFormatted,
+            subtotalFormatted,
             biggestSink,
             longestFocus,
             cleanAiSnippet,
@@ -282,7 +289,7 @@ export function TimeReceipt({
                                                     {renderAsciiBar(item.percentage)}
                                                 </span>
                                                 <span className="w-14 text-right font-semibold">
-                                                    {formatDurationShort(item.totalDuration)}
+                                                    {item.formattedDuration}
                                                 </span>
                                             </div>
                                         ))}
@@ -297,7 +304,7 @@ export function TimeReceipt({
                                                     {renderAsciiBar(receiptData.miscPercentage)}
                                                 </span>
                                                 <span className="w-14 text-right font-semibold">
-                                                    {formatDurationShort(receiptData.miscDuration)}
+                                                    {receiptData.miscFormatted}
                                                 </span>
                                             </div>
                                         )}
@@ -309,7 +316,7 @@ export function TimeReceipt({
                                             <div className="flex justify-between items-center">
                                                 <span className="text-zinc-600">BIGGEST TIME SINK:</span>
                                                 <span className="font-semibold truncate max-w-[170px] text-right">
-                                                    {receiptData.biggestSink.appName} ({formatDurationShort(receiptData.biggestSink.totalDuration)})
+                                                    {receiptData.biggestSink.appName} ({receiptData.biggestSink.formattedDuration})
                                                 </span>
                                             </div>
                                         )}
@@ -331,7 +338,7 @@ export function TimeReceipt({
                                     <div className="border-t-2 border-zinc-800 pt-2 mb-4 text-[11px]">
                                         <div className="flex justify-between text-xs font-bold mb-1">
                                             <span>SUBTOTAL</span>
-                                            <span>{formatDurationShort(totalDuration)}</span>
+                                            <span>{receiptData.subtotalFormatted}</span>
                                         </div>
                                         <div className="text-[10px] font-semibold text-zinc-700 leading-tight">
                                             TOTAL: 1 (ONE) WORKDAY

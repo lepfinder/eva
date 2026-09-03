@@ -89,6 +89,7 @@ pub struct ActivityState {
     is_suspended: bool,
     last_sample_ts: i64,   // wall-clock ms of last successful sample (suspend detection)
     last_stats_update: i64,
+    pub custom_rules: HashMap<String, String>,
 }
 
 impl ActivityState {
@@ -172,10 +173,12 @@ fn local_utc_offset_ms() -> i64 {
 
 fn static_category(app: &str) -> Option<&'static str> {
     let rules: &[(&str, &str)] = &[
+        // 研发与代码工具 (development)
         ("Code", "development"),
         ("Visual Studio Code", "development"),
         ("VS Code", "development"),
         ("Antigravity", "development"),
+        ("Antigravity IDE", "development"),
         ("IntelliJ IDEA", "development"),
         ("WebStorm", "development"),
         ("PyCharm", "development"),
@@ -186,55 +189,136 @@ fn static_category(app: &str) -> Option<&'static str> {
         ("sublime_text", "development"),
         ("Trae", "development"),
         ("Navicat", "development"),
-        ("Terminal", "development"),
+        ("DBeaver", "development"),
         ("Postman", "development"),
+        ("Insomnia", "development"),
+        ("Terminal", "development"),
+        ("GitKraken", "development"),
+        ("SourceTree", "development"),
+        ("HomeCore", "development"),
+        ("Ada", "development"),
+
+        // 运维与终端 (operations)
         ("iTerm2", "operations"),
         ("iTerm", "operations"),
+        ("Alacritty", "operations"),
+        ("Kitty", "operations"),
+        ("Docker", "operations"),
+        ("Docker Desktop", "operations"),
+        ("OrbStack", "operations"),
+        ("Windows App", "operations"),
+        ("Remote Desktop", "operations"),
+
+        // 浏览器 (browsing)
         ("Google Chrome", "browsing"),
+        ("Chrome", "browsing"),
         ("Safari", "browsing"),
         ("Firefox", "browsing"),
         ("Microsoft Edge", "browsing"),
+        ("Edge", "browsing"),
         ("Arc", "browsing"),
         ("Brave", "browsing"),
+
+        // 沟通与协作 (communication)
+        ("微信", "communication"),
+        ("WeChat", "communication"),
+        ("企业微信", "communication"),
+        ("WeCom", "communication"),
+        ("飞书", "communication"),
+        ("Feishu", "communication"),
+        ("Lark", "communication"),
+        ("钉钉", "communication"),
+        ("DingTalk", "communication"),
+        ("QQ", "communication"),
+        ("腾讯会议", "communication"),
+        ("Tencent Meeting", "communication"),
+        ("Zoom", "communication"),
+        ("Teams", "communication"),
+        ("Microsoft Teams", "communication"),
         ("Slack", "communication"),
         ("Discord", "communication"),
-        ("WeChat", "communication"),
-        ("DingTalk", "communication"),
-        ("Lark", "communication"),
-        ("Feishu", "communication"),
         ("Telegram", "communication"),
         ("Mail", "communication"),
+        ("邮件", "communication"),
         ("Microsoft Outlook", "communication"),
+        ("Outlook", "communication"),
+        ("Spark", "communication"),
+
+        // 写作与笔记 (writing)
+        ("WPS Office", "writing"),
+        ("WPS", "writing"),
+        ("wpsoffice", "writing"),
         ("Notion", "writing"),
         ("Obsidian", "writing"),
         ("obsidian", "writing"),
+        ("flomo", "writing"),
         ("Microsoft Word", "writing"),
         ("Word", "writing"),
         ("Notes", "writing"),
+        ("备忘录", "writing"),
         ("Bear", "writing"),
         ("Typora", "writing"),
+        ("Craft", "writing"),
+        ("Logseq", "writing"),
+        ("Pages", "writing"),
+
+        // 效率办公与 AI 工具 (productivity)
         ("WorkBuddy", "productivity"),
         ("EVA", "productivity"),
+        ("eva", "productivity"),
         ("小暖", "productivity"),
         ("暖窗", "productivity"),
         ("智谱AI", "productivity"),
+        ("智谱清言", "productivity"),
         ("ChatGPT", "productivity"),
         ("Claude", "productivity"),
+        ("Gemini", "productivity"),
+        ("Kimi", "productivity"),
+        ("豆包", "productivity"),
+        ("DeepSeek", "productivity"),
+        ("MiniMax", "productivity"),
+        ("AgentDeck", "productivity"),
+        ("Perplexity", "productivity"),
+        ("Raycast", "productivity"),
+        ("Alfred", "productivity"),
         ("Microsoft Excel", "productivity"),
+        ("Excel", "productivity"),
+        ("Numbers", "productivity"),
         ("Microsoft PowerPoint", "productivity"),
+        ("PowerPoint", "productivity"),
+        ("Keynote", "productivity"),
+
+        // 设计与图表 (design)
         ("Figma", "design"),
         ("Sketch", "design"),
         ("Adobe Photoshop", "design"),
+        ("Photoshop", "design"),
         ("Canva", "design"),
         ("ExcalidrawZ", "design"),
+
+        // 影音与娱乐 (entertainment)
+        ("网易云音乐", "entertainment"),
+        ("NeteaseMusic", "entertainment"),
+        ("QQ音乐", "entertainment"),
+        ("QQMusic", "entertainment"),
         ("Spotify", "entertainment"),
         ("Music", "entertainment"),
+        ("音乐", "entertainment"),
         ("QuickTime Player", "entertainment"),
         ("IINA", "entertainment"),
         ("VLC", "entertainment"),
+        ("Bilibili", "entertainment"),
+        ("哔哩哔哩", "entertainment"),
+
+        // 系统工具 (system)
         ("Finder", "system"),
+        ("访达", "system"),
         ("System Settings", "system"),
         ("System Preferences", "system"),
+        ("系统设置", "system"),
+        ("系统偏好设置", "system"),
+        ("活动监视器", "system"),
+        ("Activity Monitor", "system"),
     ];
 
     // Exact match first
@@ -275,6 +359,39 @@ fn classify_app(app: &str) -> &'static str {
     static_category(app).unwrap_or("other")
 }
 
+pub fn classify_app_with_rules(app: &str, custom_rules: &HashMap<String, String>) -> String {
+    if app == "Distracted" {
+        return "distracted".to_string();
+    }
+    if app == "Rest" {
+        return "rest".to_string();
+    }
+    if app == "System" {
+        return "system".to_string();
+    }
+    if app.to_lowercase().contains("obsidian") {
+        return "writing".to_string();
+    }
+
+    // 1. 用户自定义规则最高优先级
+    if let Some(cat) = custom_rules.get(app) {
+        return cat.clone();
+    }
+    let lower = app.to_lowercase();
+    for (k, v) in custom_rules {
+        if k.to_lowercase() == lower {
+            return v.clone();
+        }
+    }
+
+    // 2. 内置静态规则
+    if let Some(cat) = static_category(app) {
+        return cat.to_string();
+    }
+
+    "other".to_string()
+}
+
 // ──────────────────────────────────────────────────
 // Intelligent App Identity Resolution
 // ──────────────────────────────────────────────────
@@ -312,8 +429,6 @@ fn resolve_app_identity(
     } else {
         String::new()
     };
-
-    let mut project_name: Option<String> = None;
 
     // 2. Resolve from Bundle Identifier if still generic/empty
     if resolved_app.is_empty() && !is_generic(b_id) {
@@ -356,11 +471,6 @@ fn resolve_app_identity(
         if !parts.is_empty() {
             let left = parts[0].trim();
             let right = parts[parts.len() - 1].trim();
-
-            let raw_proj = left.replace("(Workspace)", "").trim().to_string();
-            if !raw_proj.is_empty() && raw_proj != "Untitled" {
-                project_name = Some(raw_proj.clone());
-            }
 
             if resolved_app.is_empty() || resolved_app == "Electron" {
                 let is_code_file = parts.iter().any(|p| {
@@ -410,7 +520,86 @@ fn resolve_app_identity(
         resolved_app = if !p_name.is_empty() { p_name.to_string() } else { "Unknown".to_string() };
     }
 
+    // 智能提取真实项目名：仅对开发工具/本地项目提取，严格过滤单文件名
+    let project_name = extract_project_from_title(&resolved_app, title);
+
     (resolved_app, project_name)
+}
+
+/// 判断字符串是否明显是文件名（而非项目名）
+fn is_likely_filename(s: &str) -> bool {
+    let trimmed = s.trim();
+    if trimmed.is_empty() {
+        return true;
+    }
+    let lower = trimmed.to_lowercase();
+    let ext_indicators = [
+        ".ts", ".tsx", ".js", ".jsx", ".rs", ".py", ".go", ".java",
+        ".vue", ".docx", ".doc", ".pdf", ".md", ".json", ".yaml",
+        ".yml", ".html", ".css", ".scss", ".sh", ".c", ".cpp", ".h",
+        ".txt", ".sql", ".png", ".jpg", ".jpeg", ".svg", ".zip",
+        ".xml", ".toml", ".lock"
+    ];
+    for ext in &ext_indicators {
+        if lower.ends_with(ext) || lower.contains(&format!("{} ", ext)) || lower.contains(&format!("{} (", ext)) {
+            return true;
+        }
+    }
+    if lower.contains("(working tree)") || lower.contains("untracked") || lower == "untitled" {
+        return true;
+    }
+    false
+}
+
+/// 从窗口标题中智能提取真实项目名（主要针对开发编辑器及本地工作区）
+fn extract_project_from_title(app: &str, title: &str) -> Option<String> {
+    // 只有开发工具与本地项目才提取项目名（排除浏览器、办公、聊天等非工程应用）
+    let is_dev_tool = match app {
+        "Cursor" | "Antigravity" | "Antigravity IDE" | "Visual Studio Code" |
+        "VS Code" | "Code" | "Trae" | "Xcode" | "IntelliJ IDEA" |
+        "WebStorm" | "PyCharm" | "Sublime Text" => true,
+        // 本地工程应用本身就是项目
+        "HomeCore" | "Ada" | "eva" | "EVA" => return Some(app.to_string()),
+        _ => false,
+    };
+
+    if !is_dev_tool || title.is_empty() {
+        return None;
+    }
+
+    let parts: Vec<&str> = if title.contains(" — ") {
+        title.split(" — ").collect()
+    } else if title.contains(" - ") {
+        title.split(" - ").collect()
+    } else {
+        vec![title]
+    };
+
+    // 1. 最高优先级：查找包含 (Workspace) 的分段
+    for part in &parts {
+        let p = part.trim();
+        if p.contains("(Workspace)") {
+            let clean = p.replace("(Workspace)", "").trim().to_string();
+            if !clean.is_empty() && !is_likely_filename(&clean) {
+                return Some(clean);
+            }
+        }
+    }
+
+    // 2. 次高优先级：查找不属于文件名的段落（且不是编辑器/系统名称本身）
+    let ignore_names = ["cursor", "code", "antigravity", "visual studio code", "trae", "workspace"];
+    for part in parts.iter().rev() {
+        let clean = part.trim();
+        let lower = clean.to_lowercase();
+        if ignore_names.iter().any(|a| &lower == a) {
+            continue;
+        }
+        if !is_likely_filename(clean) && clean.len() >= 2 && clean.len() <= 40 {
+            return Some(clean.to_string());
+        }
+    }
+
+    None
 }
 
 // ──────────────────────────────────────────────────
@@ -635,17 +824,35 @@ fn init_db(conn: &Connection) -> rusqlite::Result<()> {
             top_app TEXT,
             productivity_score REAL,
             last_updated INTEGER
+        );
+
+        CREATE TABLE IF NOT EXISTS user_app_rules (
+            app_name TEXT PRIMARY KEY,
+            category TEXT NOT NULL,
+            updated_at INTEGER NOT NULL
         );",
     )?;
     Ok(())
 }
 
-fn db_save_activity(conn: &Connection, app: &str, title: &str, project_name: Option<&str>, start: i64, end: i64) {
+fn db_save_activity(
+    conn: &Connection,
+    app: &str,
+    title: &str,
+    project_name: Option<&str>,
+    start: i64,
+    end: i64,
+    custom_rules: Option<&HashMap<String, String>>,
+) {
     let duration = (end - start) / 1000;
     if duration < 5 {
         return;
     }
-    let category = classify_app(app);
+    let category = if let Some(rules) = custom_rules {
+        classify_app_with_rules(app, rules)
+    } else {
+        classify_app(app).to_string()
+    };
     let classified = if category != "other" { 1 } else { 0 };
     let _ = conn.execute(
         "INSERT INTO activity_logs (id, app_name, window_title, start_time, end_time, duration, category, project_name, classified)
@@ -691,7 +898,7 @@ pub fn start_polling(state: SharedActivityState) {
             // Save current activity, discard gap
             if let Some(ref cur) = guard.current.take() {
                 if let Some(conn) = guard.conn() {
-                    db_save_activity(&conn, &cur.app_name, &cur.window_title, cur.project_name.as_deref(), cur.start_time, guard.last_sample_ts);
+                    db_save_activity(&conn, &cur.app_name, &cur.window_title, cur.project_name.as_deref(), cur.start_time, guard.last_sample_ts, Some(&guard.custom_rules));
                 }
             }
             guard.was_idle = false;
@@ -702,7 +909,7 @@ pub fn start_polling(state: SharedActivityState) {
             if !guard.is_suspended {
                 if let Some(ref cur) = guard.current.take() {
                     if let Some(conn) = guard.conn() {
-                        db_save_activity(&conn, &cur.app_name, &cur.window_title, cur.project_name.as_deref(), cur.start_time, now);
+                        db_save_activity(&conn, &cur.app_name, &cur.window_title, cur.project_name.as_deref(), cur.start_time, now, Some(&guard.custom_rules));
                     }
                 }
                 guard.was_idle = false;
@@ -727,7 +934,7 @@ pub fn start_polling(state: SharedActivityState) {
         if is_idle && !guard.was_idle {
             if let Some(ref cur) = guard.current.take() {
                 if let Some(conn) = guard.conn() {
-                    db_save_activity(&conn, &cur.app_name, &cur.window_title, cur.project_name.as_deref(), cur.start_time, now);
+                    db_save_activity(&conn, &cur.app_name, &cur.window_title, cur.project_name.as_deref(), cur.start_time, now, Some(&guard.custom_rules));
                 }
             }
             guard.current = Some(CurrentActivity {
@@ -744,7 +951,7 @@ pub fn start_polling(state: SharedActivityState) {
         if !is_idle && guard.was_idle {
             if let Some(ref cur) = guard.current.take() {
                 if let Some(conn) = guard.conn() {
-                    db_save_activity(&conn, &cur.app_name, &cur.window_title, cur.project_name.as_deref(), cur.start_time, now);
+                    db_save_activity(&conn, &cur.app_name, &cur.window_title, cur.project_name.as_deref(), cur.start_time, now, Some(&guard.custom_rules));
                 }
             }
             guard.was_idle = false;
@@ -794,7 +1001,7 @@ pub fn start_polling(state: SharedActivityState) {
                 // App changed — save old record
                 let old = guard.current.take().unwrap();
                 if let Some(conn) = guard.conn() {
-                    db_save_activity(&conn, &old.app_name, &old.window_title, old.project_name.as_deref(), old.start_time, now2);
+                    db_save_activity(&conn, &old.app_name, &old.window_title, old.project_name.as_deref(), old.start_time, now2, Some(&guard.custom_rules));
                 }
                 guard.current = Some(CurrentActivity {
                     app_name: app,
@@ -1247,14 +1454,96 @@ fn migrate_electron_records(conn: &Connection) {
     let _ = conn.execute_batch("COMMIT;");
 }
 
+fn reclassify_and_clean_database(conn: &Connection) {
+    // 1. 清理非开发工具或包含文件名的错误 project_name
+    let _ = conn.execute(
+        "UPDATE activity_logs 
+         SET project_name = NULL 
+         WHERE project_name IS NOT NULL 
+           AND (
+                app_name IN ('Google Chrome', 'Safari', 'Arc', 'Microsoft Edge', '微信', '企业微信', '飞书', '钉钉', 'WPS Office', 'Finder', '访达', '活动监视器')
+                OR project_name LIKE '%.pdf'
+                OR project_name LIKE '%.docx%'
+                OR project_name LIKE '%.doc%'
+                OR project_name LIKE '%.vue%'
+                OR project_name LIKE '%.ts%'
+                OR project_name LIKE '%.js%'
+                OR project_name LIKE '%.rs%'
+                OR project_name LIKE '%.py%'
+                OR project_name LIKE '%.md%'
+                OR project_name LIKE '%.yml%'
+                OR project_name LIKE '%.yaml%'
+                OR project_name LIKE '%.json%'
+                OR project_name LIKE '%.html%'
+                OR project_name LIKE '%.css%'
+                OR project_name LIKE '%(Working Tree)%'
+                OR project_name LIKE '%Untracked%'
+           )",
+        [],
+    );
+
+    // 2. 用全新的静态规则重新校正所有应用的分类
+    let mut stmt = match conn.prepare("SELECT DISTINCT app_name FROM activity_logs") {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+    let all_apps: Vec<String> = stmt
+        .query_map([], |r| r.get(0))
+        .map(|rows| rows.flatten().collect())
+        .unwrap_or_default();
+
+    let _ = conn.execute_batch("BEGIN TRANSACTION;");
+    for app in all_apps {
+        let cat = classify_app(&app);
+        if cat != "other" {
+            let _ = conn.execute(
+                "UPDATE activity_logs SET category = ?1, classified = 1 WHERE app_name = ?2 AND (category = 'other' OR category != ?1)",
+                params![cat, app],
+            );
+        }
+    }
+    let _ = conn.execute_batch("COMMIT;");
+
+    // 3. 对开发工具中未提取出项目名或被清空的记录，通过窗口标题重新提取真实项目名
+    let mut dev_stmt = match conn.prepare(
+        "SELECT id, app_name, window_title FROM activity_logs 
+         WHERE (project_name IS NULL OR project_name = '') 
+           AND app_name IN ('Cursor', 'Antigravity', 'Antigravity IDE', 'Visual Studio Code', 'VS Code', 'Code', 'Trae', 'HomeCore', 'Ada', 'eva', 'EVA')"
+    ) {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+
+    let dev_rows: Vec<(String, String, String)> = dev_stmt
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+        .map(|rows| rows.flatten().collect())
+        .unwrap_or_default();
+
+    if !dev_rows.is_empty() {
+        let _ = conn.execute_batch("BEGIN TRANSACTION;");
+        for (id, app, title) in dev_rows {
+            if let Some(proj) = extract_project_from_title(&app, &title) {
+                let _ = conn.execute(
+                    "UPDATE activity_logs SET project_name = ?1 WHERE id = ?2",
+                    params![proj, id],
+                );
+            }
+        }
+        let _ = conn.execute_batch("COMMIT;");
+    }
+
+    update_daily_stats_impl(conn);
+}
+
 /// Re-classify unclassified logs using static rules (no AI in eva)
 #[tauri::command]
 pub fn activity_classify_now(state: tauri::State<SharedActivityState>) -> i64 {
     let guard = match state.lock() { Ok(g) => g, Err(_) => return 0 };
     let conn = match guard.conn() { Some(c) => c, None => return 0 };
 
-    // Also migrate any legacy Electron records
+    // Also migrate legacy Electron records and re-clean projects
     migrate_electron_records(&conn);
+    reclassify_and_clean_database(&conn);
 
     let mut stmt = match conn.prepare(
         "SELECT id, app_name, window_title FROM activity_logs WHERE classified=0 OR classified IS NULL OR app_name = 'Electron' ORDER BY start_time DESC LIMIT 1000"
@@ -1270,7 +1559,8 @@ pub fn activity_classify_now(state: tauri::State<SharedActivityState>) -> i64 {
         let (real_app, proj) = if app == "Electron" || app == "Unknown" {
             resolve_app_identity(&app, "", "", &title)
         } else {
-            (app.clone(), None)
+            let p = extract_project_from_title(&app, &title);
+            (app.clone(), p)
         };
         let cat = classify_app(&real_app);
         if cat != "other" || real_app != app {
@@ -1474,6 +1764,157 @@ pub fn activity_rebuild_daily_stats(state: tauri::State<SharedActivityState>) {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UserAppRule {
+    pub app_name: String,
+    pub category: String,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UserAppRuleInput {
+    pub app_name: String,
+    pub category: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UnclassifiedAppSummary {
+    pub app_name: String,
+    pub total_duration: i64,
+    pub count: i64,
+    pub sample_title: Option<String>,
+}
+
+#[tauri::command]
+pub fn activity_get_custom_rules(
+    state: tauri::State<SharedActivityState>,
+) -> Vec<UserAppRule> {
+    let guard = match state.lock() { Ok(g) => g, Err(_) => return vec![] };
+    let conn = match guard.conn() { Some(c) => c, None => return vec![] };
+    let mut stmt = match conn.prepare("SELECT app_name, category, updated_at FROM user_app_rules ORDER BY updated_at DESC") {
+        Ok(s) => s,
+        Err(_) => return vec![],
+    };
+    stmt.query_map([], |r| Ok(UserAppRule {
+        app_name: r.get(0)?,
+        category: r.get(1)?,
+        updated_at: r.get(2)?,
+    })).map(|rows| rows.flatten().collect()).unwrap_or_default()
+}
+
+#[tauri::command]
+pub fn activity_set_custom_rule(
+    state: tauri::State<SharedActivityState>,
+    app_name: String,
+    category: String,
+) -> bool {
+    let mut guard = match state.lock() { Ok(g) => g, Err(_) => return false };
+    let conn = match guard.conn() { Some(c) => c, None => return false };
+    let now = now_ms();
+
+    let _ = conn.execute(
+        "INSERT INTO user_app_rules (app_name, category, updated_at)
+         VALUES (?1, ?2, ?3)
+         ON CONFLICT(app_name) DO UPDATE SET category=excluded.category, updated_at=excluded.updated_at",
+        params![app_name, category, now],
+    );
+
+    guard.custom_rules.insert(app_name.clone(), category.clone());
+
+    let _ = conn.execute(
+        "UPDATE activity_logs SET category = ?1, classified = 1 WHERE app_name = ?2",
+        params![category, app_name],
+    );
+
+    update_daily_stats_impl(&conn);
+    true
+}
+
+#[tauri::command]
+pub fn activity_batch_set_custom_rules(
+    state: tauri::State<SharedActivityState>,
+    rules: Vec<UserAppRuleInput>,
+) -> bool {
+    let mut guard = match state.lock() { Ok(g) => g, Err(_) => return false };
+    let conn = match guard.conn() { Some(c) => c, None => return false };
+    let now = now_ms();
+
+    let _ = conn.execute_batch("BEGIN TRANSACTION;");
+    for r in &rules {
+        let _ = conn.execute(
+            "INSERT INTO user_app_rules (app_name, category, updated_at)
+             VALUES (?1, ?2, ?3)
+             ON CONFLICT(app_name) DO UPDATE SET category=excluded.category, updated_at=excluded.updated_at",
+            params![r.app_name, r.category, now],
+        );
+        guard.custom_rules.insert(r.app_name.clone(), r.category.clone());
+
+        let _ = conn.execute(
+            "UPDATE activity_logs SET category = ?1, classified = 1 WHERE app_name = ?2",
+            params![r.category, r.app_name],
+        );
+    }
+    let _ = conn.execute_batch("COMMIT;");
+
+    update_daily_stats_impl(&conn);
+    true
+}
+
+#[tauri::command]
+pub fn activity_delete_custom_rule(
+    state: tauri::State<SharedActivityState>,
+    app_name: String,
+) -> bool {
+    let mut guard = match state.lock() { Ok(g) => g, Err(_) => return false };
+    let conn = match guard.conn() { Some(c) => c, None => return false };
+
+    let _ = conn.execute("DELETE FROM user_app_rules WHERE app_name = ?1", params![app_name]);
+    guard.custom_rules.remove(&app_name);
+
+    let fallback = static_category(&app_name).unwrap_or("other");
+    let _ = conn.execute(
+        "UPDATE activity_logs SET category = ?1 WHERE app_name = ?2",
+        params![fallback, app_name],
+    );
+    update_daily_stats_impl(&conn);
+    true
+}
+
+#[tauri::command]
+pub fn activity_get_unclassified_apps(
+    state: tauri::State<SharedActivityState>,
+    limit: Option<i64>,
+) -> Vec<UnclassifiedAppSummary> {
+    let guard = match state.lock() { Ok(g) => g, Err(_) => return vec![] };
+    let conn = match guard.conn() { Some(c) => c, None => return vec![] };
+    let limit = limit.unwrap_or(50);
+
+    let mut stmt = match conn.prepare(
+        "SELECT app_name, SUM(duration) as total_dur, COUNT(*) as cnt,
+                (SELECT window_title FROM activity_logs a2 WHERE a2.app_name = a1.app_name AND a2.window_title != '' ORDER BY start_time DESC LIMIT 1) as sample_title
+         FROM activity_logs a1
+         WHERE (category = 'other' OR category IS NULL OR category = '') 
+           AND app_name NOT IN ('Distracted','Rest','System')
+           AND app_name != ''
+         GROUP BY app_name
+         ORDER BY total_dur DESC
+         LIMIT ?1"
+    ) {
+        Ok(s) => s,
+        Err(_) => return vec![],
+    };
+
+    stmt.query_map([limit], |r| Ok(UnclassifiedAppSummary {
+        app_name: r.get(0)?,
+        total_duration: r.get(1)?,
+        count: r.get(2)?,
+        sample_title: r.get(3)?,
+    })).map(|rows| rows.flatten().collect()).unwrap_or_default()
+}
+
 // ──────────────────────────────────────────────────
 // Init
 // ──────────────────────────────────────────────────
@@ -1489,11 +1930,22 @@ pub fn init(app: &AppHandle) -> SharedActivityState {
 
     let db_path = user_data.join("activity-tracker.db").to_string_lossy().to_string();
 
+    let mut initial_rules = HashMap::new();
+
     // Init schema
     if let Ok(conn) = Connection::open(&db_path) {
         let _ = init_db(&conn);
         migrate_electron_records(&conn);
+        reclassify_and_clean_database(&conn);
         update_daily_stats_impl(&conn);
+
+        if let Ok(mut stmt) = conn.prepare("SELECT app_name, category FROM user_app_rules") {
+            if let Ok(rows) = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?))) {
+                for r in rows.flatten() {
+                    initial_rules.insert(r.0, r.1);
+                }
+            }
+        }
     }
 
     let state = Arc::new(Mutex::new(ActivityState {
@@ -1503,6 +1955,7 @@ pub fn init(app: &AppHandle) -> SharedActivityState {
         is_suspended: false,
         last_sample_ts: 0,
         last_stats_update: 0,
+        custom_rules: initial_rules,
     }));
 
     start_polling(Arc::clone(&state));

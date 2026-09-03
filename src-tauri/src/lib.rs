@@ -238,6 +238,11 @@ pub fn run() {
             activity_tracker::activity_generate_summary,
             activity_tracker::activity_get_heatmap_data,
             activity_tracker::activity_rebuild_daily_stats,
+            activity_tracker::activity_get_custom_rules,
+            activity_tracker::activity_set_custom_rule,
+            activity_tracker::activity_batch_set_custom_rules,
+            activity_tracker::activity_delete_custom_rule,
+            activity_tracker::activity_get_unclassified_apps,
             // Vault
             vault::vault_can_use_biometric,
             vault::vault_unlock,

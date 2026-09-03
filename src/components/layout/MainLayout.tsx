@@ -10,6 +10,7 @@ import { ClipboardHistoryPage } from '@/pages/ClipboardHistoryPage'
 import { TimeAuditorPage } from '@/pages/TimeAuditorPage'
 import { VisualRecallPage } from '@/pages/VisualRecallPage'
 import { ServicesPage } from '@/pages/ServicesPage'
+import { CommandPaletteModal } from '@/components/CommandPaletteModal'
 
 // 导航项到中文名称的映射
 const NAV_TITLE_MAP: Record<NavItem, string> = {
@@ -89,7 +90,70 @@ export function MainLayoutContents(): React.ReactElement {
     }
 
     window.addEventListener('navigate-to-tool', handleNavigateToTool)
-    return () => window.removeEventListener('navigate-to-tool', handleNavigateToTool)
+
+    const handleNavigateToPage = (e: Event) => {
+      const customEvent = e as CustomEvent<{ page: NavItem }>
+      const page = customEvent.detail?.page
+      if (page) {
+        setActiveNav(page)
+      }
+    }
+    window.addEventListener('navigate-to-page', handleNavigateToPage)
+
+    return () => {
+      window.removeEventListener('navigate-to-tool', handleNavigateToTool)
+      window.removeEventListener('navigate-to-page', handleNavigateToPage)
+    }
+  }, [])
+
+  // 监听应用内快捷键 (如 Cmd + P 打开端口工具)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const isCmdOrCtrl = e.metaKey || e.ctrlKey
+
+      // 1. Cmd + P: 直达本地监听端口工具 (并拦截默认的浏览器打印弹窗)
+      if (isCmdOrCtrl && (e.key === 'p' || e.key === 'P')) {
+        e.preventDefault()
+        setActiveNav('toolbox')
+        setTimeout(() => {
+          window.dispatchEvent(new CustomEvent('open-tool', {
+            detail: { toolId: 'local-ports' }
+          }))
+        }, 100)
+        return
+      }
+
+      // 2. Cmd + ,: 标准 macOS 打开设置
+      if (isCmdOrCtrl && e.key === ',') {
+        e.preventDefault()
+        setActiveNav('settings')
+        return
+      }
+
+      // 3. Cmd + 1~9: 严格按左侧侧边栏从上到下的顺序一键直达 (避免在输入框打字时误触)
+      const target = e.target as HTMLElement
+      const isInput = target?.tagName === 'INPUT' || target?.tagName === 'TEXTAREA' || target?.isContentEditable
+      if (isCmdOrCtrl && !isInput) {
+        const numToNav: Record<string, NavItem> = {
+          '1': 'dashboard',    // CORE: 仪表盘
+          '2': 'navigation',   // ACTION: 网站导航
+          '3': 'services',     // ACTION: 本地服务
+          '4': 'toolbox',      // ACTION: 工具箱
+          '5': 'clipboard',    // MEMORY: 剪贴板
+          '6': 'timeauditor',  // MEMORY: 时间审计
+          '7': 'visualrecall', // MEMORY: 视觉回溯
+          '8': 'vault',        // MEMORY: 保险箱
+          '9': 'settings',     // 底部: 设置
+        }
+        if (numToNav[e.key]) {
+          e.preventDefault()
+          setActiveNav(numToNav[e.key])
+        }
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
   }, [])
 
   const renderPage = (): React.ReactElement => {
@@ -143,6 +207,9 @@ export function MainLayoutContents(): React.ReactElement {
           </main>
         )}
       </div>
+
+      {/* 全局万能命令调色板 (Command + K) */}
+      <CommandPaletteModal />
     </div>
   )
 }

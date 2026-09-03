@@ -473,9 +473,10 @@ fn start_server_thread(
                 // 13. Recall: Query
                 (Method::Get, "/api/recall") => {
                     let limit: i64 = query_map.get("limit").and_then(|l| l.parse().ok()).unwrap_or(20);
+                    let offset: i64 = query_map.get("offset").and_then(|l| l.parse().ok()).unwrap_or(0);
                     let now = activity_tracker::now_ms();
                     let start = now - 7 * 86400 * 1000;
-                    let snapshots = visual_recall::db_query_by_time_range(&user_data_dir, start, now, limit);
+                    let snapshots = visual_recall::db_query_by_time_range(&user_data_dir, start, now, limit, offset);
                     let _ = request.respond(json_response(&snapshots, 200));
                 }
 
