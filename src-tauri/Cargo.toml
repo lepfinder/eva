@@ -1,6 +1,6 @@
 [package]
 name = "eva"
-version = "0.1.2"
+version = "0.1.4"
 description = "EVA Desktop Context & Intelligence System for AI Agents"
 authors = ["xiyangxie"]
 license = "MIT"
@@ -47,6 +47,7 @@ hex = "0.4"
 aes = "0.8"
 cbc = { version = "0.1", features = ["std"] }
 tiny_http = "0.12"
+xcap = "0.9.4"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc = "0.2"

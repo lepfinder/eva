@@ -1,16 +1,21 @@
 // visual_recall.rs — 视觉回溯模块
 //
-// 截图采集：macOS screencapture -x（静默，无快门声）
-// 存储格式：JPEG（缩略图 480px + 原图 1920px）
-// 去重算法：SHA-256 采样哈希，与上一帧比较
-// 触发策略：窗口标题变化 + 定时兜底（30s）+ 最小间隔防抖（5s）
-// 图片服务：Tauri asset 协议（前端使用 convertFileSrc 获取 URL）
+// 借鉴 screenpipe 的核心架构与技术方案：
+// 1. 原生跨平台内存截图：采用 xcap 原生截屏，直接在内存中生成 DynamicImage，零临时文件、无外部子进程开销。
+// 2. 多显示器与全屏窗口动态适配：根据当前前台应用窗口的物理坐标，精确定位并捕获该窗口所在的显示器。
+// 3. 自身窗口过滤（借鉴 screenpipe SKIP_APPS）：跳过 EVA 自身界面的重复截图。
+// 4. 屏幕录制权限预检：调用 macOS CoreGraphics API 检查与申请屏幕录制授权。
+// 5. 帧差分双层去重（借鉴 screenpipe-screen/frame_comparison）：
+//    - 1/4 降采样 + 灰度快速颜色 Hash：相同直接跳过（< 1ms）
+//    - 灰度直方图（Luma Histogram）比对差分分值：微小抖动/时钟跳动（< 1.5%）不重复存盘
+// 6. 配置持久化：启用状态与参数持久化存储在 SQLite 中，重启 EVA 后自愈保持录制
 
-use image::{codecs::jpeg::JpegEncoder, DynamicImage, ImageFormat};
+use image::{codecs::jpeg::JpegEncoder, DynamicImage, GenericImageView};
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
+use std::collections::hash_map::DefaultHasher;
 use std::fs;
+use std::hash::{Hash, Hasher};
 use std::io::BufWriter;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -19,15 +24,27 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Manager, State};
 
 // ─────────────────────────────────────────
-// 常量
+// macOS CoreGraphics 权限系统 API
+// ─────────────────────────────────────────
+
+#[cfg(target_os = "macos")]
+#[link(name = "CoreGraphics", kind = "framework")]
+extern "C" {
+    fn CGPreflightScreenCaptureAccess() -> bool;
+    fn CGRequestScreenCaptureAccess() -> bool;
+}
+
+// ─────────────────────────────────────────
+// 常量定义
 // ─────────────────────────────────────────
 
 const THUMB_WIDTH: u32 = 480;
 const FULL_WIDTH: u32 = 1920;
 const JPEG_QUALITY: u8 = 82;
-const POLL_INTERVAL_MS: u64 = 8_000; // 每8秒采样一次，搭配 debounce
-const MIN_CAPTURE_SECS: f64 = 5.0; // 最小采集间隔（防抖）
-const FORCED_CAPTURE_SECS: f64 = 30.0; // 即使标题未变也强制采集一次
+const POLL_INTERVAL_MS: u64 = 4_000; // 每4秒检测一次
+const MIN_CAPTURE_SECS: f64 = 4.0;   // 最小采样间隔
+const FORCED_CAPTURE_SECS: f64 = 45.0; // 兜底强制采样间隔（秒）
+const HISTOGRAM_DIFF_THRESHOLD: f64 = 0.015; // 灰度直方图差异阈值 1.5%
 
 // ─────────────────────────────────────────
 // 类型定义
@@ -58,8 +75,8 @@ pub struct VrSnapshot {
     pub timestamp: i64,
     pub app_name: String,
     pub window_title: String,
-    pub thumb_path: String,    // 绝对路径，前端用 convertFileSrc 加载
-    pub full_path: Option<String>, // 同上，可为 None（旧数据）
+    pub thumb_path: String,
+    pub full_path: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -78,13 +95,102 @@ pub struct VrStorageStats {
     pub newest_ts: Option<i64>,
 }
 
+#[derive(Debug, Clone)]
+struct ActiveWindowInfo {
+    app_name: String,
+    window_title: String,
+    center_x: i32,
+    center_y: i32,
+}
+
+// ─────────────────────────────────────────
+// 帧差分比较器（Screenpipe FrameComparer 精炼版）
+// ─────────────────────────────────────────
+
+struct FrameComparer {
+    previous_hash: Option<u64>,
+    previous_histogram: Option<[f64; 256]>,
+}
+
+impl FrameComparer {
+    fn new() -> Self {
+        Self {
+            previous_hash: None,
+            previous_histogram: None,
+        }
+    }
+
+    /// 将图像缩小并转为灰度，同时计算快速颜色哈希与亮度直方图
+    fn process_thumbnail(img: &DynamicImage) -> (u64, [f64; 256]) {
+        let (orig_w, orig_h) = img.dimensions();
+        let target_w = (orig_w / 4).clamp(160, 480);
+        let target_h = ((orig_h as u64 * target_w as u64) / orig_w.max(1) as u64).max(1) as u32;
+
+        let mut hasher = DefaultHasher::new();
+        let mut hist = [0u64; 256];
+        let mut total_pixels = 0u64;
+
+        for y in 0..target_h {
+            let src_y = ((y as u64 * orig_h as u64) / target_h as u64) as u32;
+            for x in 0..target_w {
+                let src_x = ((x as u64 * orig_w as u64) / target_w as u64) as u32;
+                let p = img.get_pixel(src_x, src_y);
+                p.0.hash(&mut hasher);
+                let luma = (p.0[0] as u32 * 299 + p.0[1] as u32 * 587 + p.0[2] as u32 * 114) / 1000;
+                let bin = (luma as usize).min(255);
+                hist[bin] += 1;
+                total_pixels += 1;
+            }
+        }
+
+        let mut norm_hist = [0.0f64; 256];
+        if total_pixels > 0 {
+            let total_f = total_pixels as f64;
+            for i in 0..256 {
+                norm_hist[i] = hist[i] as f64 / total_f;
+            }
+        }
+
+        (hasher.finish(), norm_hist)
+    }
+
+    /// 返回差异分值 0.0 (完全相同) ~ 1.0 (完全不同)
+    fn compare_and_update(&mut self, img: &DynamicImage) -> f64 {
+        let (curr_hash, curr_hist) = Self::process_thumbnail(img);
+
+        // 1. Hash 早退（完全静止画面）
+        if let Some(prev_hash) = self.previous_hash {
+            if prev_hash == curr_hash {
+                return 0.0;
+            }
+        }
+
+        // 2. 灰度直方图比对
+        let diff = if let Some(ref prev_hist) = self.previous_histogram {
+            let mut l1_diff = 0.0f64;
+            for i in 0..256 {
+                l1_diff += (prev_hist[i] - curr_hist[i]).abs();
+            }
+            (l1_diff / 2.0).clamp(0.0, 1.0)
+        } else {
+            1.0
+        };
+
+        // 更新状态
+        self.previous_hash = Some(curr_hash);
+        self.previous_histogram = Some(curr_hist);
+
+        diff
+    }
+}
+
 // ─────────────────────────────────────────
 // 共享状态
 // ─────────────────────────────────────────
 
 struct VrInner {
     config: VrConfig,
-    last_hash: Option<String>,
+    comparer: FrameComparer,
     last_capture_secs: f64,
     last_window_title: String,
     last_app_name: String,
@@ -107,24 +213,22 @@ fn screenshots_dir(data_path: &Path) -> PathBuf {
     data_path.join("screenshots")
 }
 
-/// 利用 macOS `date -r` 将 unix 秒数转为本地 YYYY/MM/DD 字符串
 fn secs_to_date_dir(secs: i64) -> String {
-    let out = Command::new("date")
-        .args(["-r", &secs.to_string(), "+%Y/%m/%d"])
-        .output()
-        .ok()
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .unwrap_or_default();
-    let s = out.trim().to_string();
-    if s.len() == 10 {
-        s.replace('-', "/")
-    } else {
-        "unknown".to_string()
-    }
+    let days = (secs / 86400) + 719468;
+    let era = if days >= 0 { days } else { days - 146096 } / 146097;
+    let doe = (days - era * 146097) as u32;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    format!("{:04}/{:02}/{:02}", y, m, d)
 }
 
 // ─────────────────────────────────────────
-// 数据库
+// 数据库操作与配置持久化
 // ─────────────────────────────────────────
 
 fn init_db(data_path: &Path) {
@@ -136,7 +240,8 @@ fn init_db(data_path: &Path) {
             return;
         }
     };
-    if let Err(e) = conn.execute_batch(
+
+    let _ = conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS screen_snapshots (
             id          INTEGER PRIMARY KEY AUTOINCREMENT,
             timestamp   INTEGER NOT NULL,
@@ -144,13 +249,78 @@ fn init_db(data_path: &Path) {
             window_title TEXT,
             thumb_path  TEXT,
             full_path   TEXT,
-            content_hash TEXT UNIQUE
+            content_hash TEXT
         );
         CREATE INDEX IF NOT EXISTS idx_vr_time ON screen_snapshots(timestamp DESC);
-        CREATE INDEX IF NOT EXISTS idx_vr_app ON screen_snapshots(app_name);",
+        CREATE INDEX IF NOT EXISTS idx_vr_app ON screen_snapshots(app_name);
+
+        CREATE TABLE IF NOT EXISTS vr_settings (
+            key         TEXT PRIMARY KEY,
+            value       TEXT NOT NULL
+        );",
+    );
+}
+
+fn db_load_config(data_path: &Path) -> VrConfig {
+    let default_config = VrConfig::default();
+    let conn = match Connection::open(db_path(data_path)) {
+        Ok(c) => c,
+        Err(_) => return default_config,
+    };
+
+    let mut config = default_config;
+    if let Ok(enabled_str) = conn.query_row(
+        "SELECT value FROM vr_settings WHERE key = 'enabled'",
+        [],
+        |r| r.get::<_, String>(0),
     ) {
-        log::error!("[VisualRecall] DB init failed: {}", e);
+        config.enabled = enabled_str == "true" || enabled_str == "1";
     }
+
+    if let Ok(interval_str) = conn.query_row(
+        "SELECT value FROM vr_settings WHERE key = 'interval_secs'",
+        [],
+        |r| r.get::<_, String>(0),
+    ) {
+        if let Ok(val) = interval_str.parse::<u64>() {
+            config.interval_secs = val;
+        }
+    }
+
+    if let Ok(storage_str) = conn.query_row(
+        "SELECT value FROM vr_settings WHERE key = 'max_storage_mb'",
+        [],
+        |r| r.get::<_, String>(0),
+    ) {
+        if let Ok(val) = storage_str.parse::<u64>() {
+            config.max_storage_mb = val;
+        }
+    }
+
+    config
+}
+
+fn db_save_config(data_path: &Path, config: &VrConfig) {
+    let conn = match Connection::open(db_path(data_path)) {
+        Ok(c) => c,
+        Err(_) => return,
+    };
+
+    let _ = conn.execute(
+        "INSERT INTO vr_settings (key, value) VALUES ('enabled', ?1)
+         ON CONFLICT(key) DO UPDATE SET value = ?1",
+        params![if config.enabled { "true" } else { "false" }],
+    );
+    let _ = conn.execute(
+        "INSERT INTO vr_settings (key, value) VALUES ('interval_secs', ?1)
+         ON CONFLICT(key) DO UPDATE SET value = ?1",
+        params![config.interval_secs.to_string()],
+    );
+    let _ = conn.execute(
+        "INSERT INTO vr_settings (key, value) VALUES ('max_storage_mb', ?1)
+         ON CONFLICT(key) DO UPDATE SET value = ?1",
+        params![config.max_storage_mb.to_string()],
+    );
 }
 
 fn db_insert(
@@ -224,23 +394,14 @@ fn db_get_stats(data_path: &Path) -> VrStorageStats {
         .query_row("SELECT COUNT(*) FROM screen_snapshots", [], |r| r.get(0))
         .unwrap_or(0);
     let oldest_ts: Option<i64> = conn
-        .query_row(
-            "SELECT MIN(timestamp) FROM screen_snapshots",
-            [],
-            |r| r.get(0),
-        )
+        .query_row("SELECT MIN(timestamp) FROM screen_snapshots", [], |r| r.get(0))
         .ok()
         .flatten();
     let newest_ts: Option<i64> = conn
-        .query_row(
-            "SELECT MAX(timestamp) FROM screen_snapshots",
-            [],
-            |r| r.get(0),
-        )
+        .query_row("SELECT MAX(timestamp) FROM screen_snapshots", [], |r| r.get(0))
         .ok()
         .flatten();
 
-    // 估算磁盘占用（遍历目录）
     let total_bytes = dir_size(&screenshots_dir(data_path));
 
     VrStorageStats {
@@ -270,7 +431,7 @@ fn dir_size(dir: &Path) -> u64 {
 }
 
 // ─────────────────────────────────────────
-// 截图采集
+// 原生多屏幕捕获（xcap 零文件开销 + 多屏自适应）
 // ─────────────────────────────────────────
 
 fn now_secs() -> f64 {
@@ -287,46 +448,38 @@ fn now_ms() -> i64 {
         .as_millis() as i64
 }
 
-/// 使用 macOS screencapture -x 截图主屏到临时文件并读取字节
-fn capture_screen_bytes() -> Result<Vec<u8>, String> {
-    let ts = now_ms();
-    let temp_path = std::env::temp_dir().join(format!("eva-vr-{}.png", ts));
-    let temp_str = temp_path.to_string_lossy().to_string();
-
-    let status = Command::new("screencapture")
-        .args(["-x", "-t", "png", "-D", "1", &temp_str])
-        .status()
-        .map_err(|e| format!("screencapture exec failed: {}", e))?;
-
-    if !status.success() {
-        return Err("screencapture returned non-zero".to_string());
-    }
-    if !temp_path.exists() {
-        return Err("screencapture output file missing".to_string());
+/// 根据目标点坐标 (center_x, center_y) 捕获对应显示器图像，纯内存操作
+fn capture_screen_image_at(center_x: i32, center_y: i32) -> Result<DynamicImage, String> {
+    let monitors = xcap::Monitor::all().map_err(|e| format!("list monitors failed: {}", e))?;
+    if monitors.is_empty() {
+        return Err("No monitor found".to_string());
     }
 
-    let bytes = fs::read(&temp_path).map_err(|e| format!("read temp file: {}", e))?;
-    let _ = fs::remove_file(&temp_path);
-    Ok(bytes)
+    // 寻找包含前台窗口中心点的显示器
+    let target_monitor = monitors.iter().find(|m| {
+        let mx = m.x().unwrap_or(0);
+        let my = m.y().unwrap_or(0);
+        let mw = m.width().unwrap_or(0) as i32;
+        let mh = m.height().unwrap_or(0) as i32;
+        center_x >= mx && center_x < mx + mw && center_y >= my && center_y < my + mh
+    });
+
+    // 没命中则回退到主显示器或第一个显示器
+    let monitor = target_monitor.unwrap_or_else(|| {
+        monitors
+            .iter()
+            .find(|m| m.is_primary().unwrap_or(false))
+            .unwrap_or(&monitors[0])
+    });
+
+    let rgba_image = monitor
+        .capture_image()
+        .map_err(|e| format!("capture image failed: {}", e))?;
+
+    Ok(DynamicImage::ImageRgba8(rgba_image))
 }
 
-/// SHA-256 采样哈希（首/中/尾 各 10KB），与 Python 版本策略一致
-fn sampled_hash(data: &[u8]) -> String {
-    const CHUNK: usize = 10_240;
-    let len = data.len();
-    let mut h = Sha256::new();
-    if len <= CHUNK * 3 {
-        h.update(data);
-    } else {
-        h.update(&data[..CHUNK]);
-        let mid = len / 2;
-        h.update(&data[mid..mid + CHUNK]);
-        h.update(&data[len - CHUNK..]);
-    }
-    hex::encode(h.finalize())
-}
-
-/// 保存 JPEG（缩略图 + 原图）到目录，返回 (thumb_abs_path, full_abs_path)
+/// 保存 JPEG（缩略图 + 原图）到本地目录
 fn save_images(
     img: &DynamicImage,
     screenshots_base: &Path,
@@ -334,17 +487,16 @@ fn save_images(
 ) -> Result<(String, String), String> {
     let date_dir = secs_to_date_dir(timestamp / 1000);
     let target_dir = screenshots_base.join(&date_dir);
-    fs::create_dir_all(&target_dir)
-        .map_err(|e| format!("mkdir failed: {}", e))?;
+    fs::create_dir_all(&target_dir).map_err(|e| format!("mkdir failed: {}", e))?;
 
     let base_name = format!("snapshot_{}", timestamp);
 
-    // ── 缩略图
+    // ── 缩略图 (480px)
     let thumb = img.thumbnail(THUMB_WIDTH, THUMB_WIDTH * 100);
     let thumb_path = target_dir.join(format!("{}_thumb.jpg", base_name));
     save_jpeg(&thumb, &thumb_path)?;
 
-    // ── 原图（最大宽度 1920）
+    // ── 原图（最大宽度 1920px）
     let full = if img.width() > FULL_WIDTH {
         img.thumbnail(FULL_WIDTH, FULL_WIDTH * 100)
     } else {
@@ -360,8 +512,7 @@ fn save_images(
 }
 
 fn save_jpeg(img: &DynamicImage, path: &Path) -> Result<(), String> {
-    let file =
-        fs::File::create(path).map_err(|e| format!("create file {:?}: {}", path, e))?;
+    let file = fs::File::create(path).map_err(|e| format!("create file {:?}: {}", path, e))?;
     let mut writer = BufWriter::new(file);
     let rgb = img.to_rgb8();
     let mut encoder = JpegEncoder::new_with_quality(&mut writer, JPEG_QUALITY);
@@ -372,16 +523,20 @@ fn save_jpeg(img: &DynamicImage, path: &Path) -> Result<(), String> {
 }
 
 // ─────────────────────────────────────────
-// 采集主流程（在后台线程中调用）
+// 采集流程与帧对比门控
 // ─────────────────────────────────────────
 
-/// 单次采集尝试。返回 Some(VrSnapshot) 表示成功保存，None 表示跳过。
-fn try_capture(inner: &mut VrInner, app_name: String, window_title: String) -> Option<VrSnapshot> {
+fn try_capture(inner: &mut VrInner, win: ActiveWindowInfo) -> Option<VrSnapshot> {
     let now = now_secs();
 
-    // ── 智能触发判断
+    // 排除 EVA 自身窗口，避免自拍套娃
+    let app_lower = win.app_name.to_lowercase();
+    if app_lower == "eva" || app_lower == "eva-lib" || app_lower == "eva - 时间小票" {
+        return None;
+    }
+
     let title_changed =
-        window_title != inner.last_window_title || app_name != inner.last_app_name;
+        win.window_title != inner.last_window_title || win.app_name != inner.last_app_name;
     let elapsed = now - inner.last_capture_secs;
 
     let should_capture = if title_changed {
@@ -394,35 +549,24 @@ fn try_capture(inner: &mut VrInner, app_name: String, window_title: String) -> O
         return None;
     }
 
-    // ── 截图
-    let bytes = match capture_screen_bytes() {
-        Ok(b) => b,
+    // 1. 原生内存截图（多屏自适应）
+    let img = match capture_screen_image_at(win.center_x, win.center_y) {
+        Ok(i) => i,
         Err(e) => {
-            log::warn!("[VisualRecall] capture failed: {}", e);
+            log::warn!("[VisualRecall] capture screen failed: {}", e);
             return None;
         }
     };
 
-    // ── 内容哈希去重
-    let hash = sampled_hash(&bytes);
-    if inner.last_hash.as_deref() == Some(&hash) {
-        // 内容相同，更新时间戳但不保存
-        inner.last_capture_secs = now;
-        inner.last_window_title = window_title;
-        inner.last_app_name = app_name;
+    // 2. 双层差分比较（Screenpipe 机制）
+    let diff = inner.comparer.compare_and_update(&img);
+
+    // 如果应用/标题没变，且画面差异度低于 1.5%，跳过存盘
+    if !title_changed && diff < HISTOGRAM_DIFF_THRESHOLD {
         return None;
     }
 
-    // ── 解码图像
-    let img = match image::load_from_memory_with_format(&bytes, ImageFormat::Png) {
-        Ok(i) => i,
-        Err(e) => {
-            log::warn!("[VisualRecall] image decode failed: {}", e);
-            return None;
-        }
-    };
-
-    // ── 保存图片
+    // 3. 编码保存 JPEG 图片
     let shots_dir = screenshots_dir(&inner.data_path);
     let timestamp = now_ms();
     let (thumb_path, full_path) = match save_images(&img, &shots_dir, timestamp) {
@@ -433,116 +577,137 @@ fn try_capture(inner: &mut VrInner, app_name: String, window_title: String) -> O
         }
     };
 
-    // ── 写入 DB
+    let hash_str = format!("diff_{:.4}_{}", diff, timestamp);
+
+    // 4. 写入 SQLite
     let row_id = db_insert(
         &inner.data_path,
         timestamp,
-        &app_name,
-        &window_title,
+        &win.app_name,
+        &win.window_title,
         &thumb_path,
         Some(&full_path),
-        &hash,
+        &hash_str,
     )?;
 
-    // ── 更新状态
-    inner.last_hash = Some(hash);
+    // 5. 更新状态
     inner.last_capture_secs = now;
-    inner.last_window_title = window_title.clone();
-    inner.last_app_name = app_name.clone();
+    inner.last_window_title = win.window_title.clone();
+    inner.last_app_name = win.app_name.clone();
 
-    log::debug!("[VisualRecall] saved id={} app={}", row_id, app_name);
+    log::debug!(
+        "[VisualRecall] saved snapshot id={} app={} diff={:.4}",
+        row_id,
+        win.app_name,
+        diff
+    );
+
     Some(VrSnapshot {
         id: row_id,
         timestamp,
-        app_name,
-        window_title,
+        app_name: win.app_name,
+        window_title: win.window_title,
         thumb_path,
         full_path: Some(full_path),
     })
 }
 
 // ─────────────────────────────────────────
-// 窗口检测（与 activity_tracker 相同方案）
+// 前台窗口与坐标检测
 // ─────────────────────────────────────────
 
-fn get_active_window() -> Option<(String, String)> {
-    // 使用 lsappinfo（直接查询 WindowServer）获取前台应用的精确身份，
-    // 按 ASN 独立标识，即使多个进程共享 com.github.Electron bundle ID 也不会混淆。
-    let front_asn = Command::new("lsappinfo")
-        .arg("front")
-        .output()
-        .ok()?;
-    let asn = String::from_utf8_lossy(&front_asn.stdout).trim().to_string();
-    if asn.is_empty() {
+fn get_active_window() -> Option<ActiveWindowInfo> {
+    let script = r#"
+    tell application "System Events"
+        set frontApp to first application process whose frontmost is true
+        set appName to name of frontApp
+        set winTitle to ""
+        set winX to 0
+        set winY to 0
+        set winW to 0
+        set winH to 0
+        try
+            if exists (1st window of frontApp whose value of attribute "AXMain" is true) then
+                set w to (1st window of frontApp whose value of attribute "AXMain" is true)
+                set winTitle to name of w
+                set p to position of w
+                set s to size of w
+                set winX to item 1 of p
+                set winY to item 2 of p
+                set winW to item 1 of s
+                set winH to item 2 of s
+            else if exists (1st window of frontApp) then
+                set w to 1st window of frontApp
+                set winTitle to name of w
+                set p to position of w
+                set s to size of w
+                set winX to item 1 of p
+                set winY to item 2 of p
+                set winW to item 1 of s
+                set winH to item 2 of s
+            end if
+        end try
+        return appName & "|||" & winTitle & "|||" & winX & "," & winY & "," & winW & "," & winH
+    end tell
+    "#;
+
+    let out = Command::new("osascript").arg("-e").arg(script).output().ok()?;
+    let res = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    let parts: Vec<&str> = res.split("|||").collect();
+    if parts.len() < 3 {
         return None;
     }
 
-    let info_out = Command::new("lsappinfo")
-        .args(["info", "-only", "name", "-only", "pid", "-only", "bundleid", "-only", "bundlepath", &asn])
-        .output()
-        .ok()?;
-    let info = String::from_utf8_lossy(&info_out.stdout);
+    let mut app_name = parts[0].trim().to_string();
+    let window_title = parts[1].trim().to_string();
 
-    let mut display_name = String::new();
-    let mut pid_str = String::new();
-    let mut bundle_id = String::new();
-    let mut bundle_path = String::new();
-
-    for line in info.lines() {
-        let line = line.trim();
-        if let Some(val) = line.strip_prefix("\"LSDisplayName\"=") {
-            display_name = val.trim_matches('"').to_string();
-        } else if let Some(val) = line.strip_prefix("\"pid\"=") {
-            pid_str = val.to_string();
-        } else if let Some(val) = line.strip_prefix("\"CFBundleIdentifier\"=") {
-            bundle_id = val.trim_matches('"').to_string();
-        } else if let Some(val) = line.strip_prefix("\"LSBundlePath\"=") {
-            bundle_path = val.trim_matches('"').to_string();
+    // 针对 Electron 应用名称规范
+    if app_name.to_lowercase() == "electron" {
+        if let Some(front_asn) = Command::new("lsappinfo").arg("front").output().ok() {
+            let asn = String::from_utf8_lossy(&front_asn.stdout).trim().to_string();
+            if let Some(info_out) = Command::new("lsappinfo")
+                .args(["info", "-only", "bundlepath", &asn])
+                .output()
+                .ok()
+            {
+                let info = String::from_utf8_lossy(&info_out.stdout);
+                for line in info.lines() {
+                    if let Some(path) = line.strip_prefix("\"LSBundlePath\"=") {
+                        let clean_path = path.trim_matches('"');
+                        if let Some(name) = extract_vr_project_name(clean_path) {
+                            app_name = name;
+                            break;
+                        }
+                    }
+                }
+            }
         }
     }
 
-    let pid: u32 = pid_str.parse().ok()?;
+    let rect_parts: Vec<i32> = parts[2]
+        .split(',')
+        .filter_map(|s| s.trim().parse().ok())
+        .collect();
 
-    // 对于通用 Electron 进程，从 bundle path 推断实际应用名
-    let app = if bundle_id == "com.github.Electron" && !bundle_path.is_empty() {
-        extract_vr_project_name(&bundle_path).unwrap_or(display_name)
+    let (cx, cy) = if rect_parts.len() == 4 {
+        let (x, y, w, h) = (rect_parts[0], rect_parts[1], rect_parts[2], rect_parts[3]);
+        (x + w / 2, y + h / 2)
     } else {
-        display_name
+        (0, 0)
     };
 
-    // 用精确 PID 获取窗口标题
-    let title_script = format!(
-        r#"tell application "System Events"
-    set p to first application process whose unix id is {}
-    set windowTitle to ""
-    try
-        if exists (1st window of p whose value of attribute "AXMain" is true) then
-            set windowTitle to name of 1st window of p whose value of attribute "AXMain" is true
-        else if exists (1st window of p) then
-            set windowTitle to name of 1st window of p
-        end if
-    end try
-    return windowTitle
-end tell"#,
-        pid
-    );
-
-    let title_out = Command::new("osascript")
-        .arg("-e")
-        .arg(&title_script)
-        .output()
-        .ok();
-    let title = title_out
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-        .unwrap_or_default();
-
-    if app.is_empty() {
+    if app_name.is_empty() {
         return None;
     }
-    Some((app, title))
+
+    Some(ActiveWindowInfo {
+        app_name,
+        window_title,
+        center_x: cx,
+        center_y: cy,
+    })
 }
 
-/// 从 bundle path 推断项目名（与 activity_tracker 中的逻辑一致）
 fn extract_vr_project_name(bundle_path: &str) -> Option<String> {
     if bundle_path.starts_with("/Applications/") {
         let app_name = bundle_path
@@ -576,26 +741,31 @@ fn start_polling(shared: SharedVrInner) {
     std::thread::spawn(move || loop {
         std::thread::sleep(Duration::from_millis(POLL_INTERVAL_MS));
 
-        // 检查是否启用（持锁时间最短）
-        let enabled = shared.lock().unwrap().config.enabled;
+        let enabled = {
+            if let Ok(guard) = shared.lock() {
+                guard.config.enabled
+            } else {
+                false
+            }
+        };
+
         if !enabled {
             continue;
         }
 
-        // 获取窗口信息（AppleScript，在锁外执行）
         let window = match get_active_window() {
             Some(w) => w,
             None => continue,
         };
 
-        // 执行采集
-        let mut guard = shared.lock().unwrap();
-        try_capture(&mut guard, window.0, window.1);
+        if let Ok(mut guard) = shared.lock() {
+            try_capture(&mut guard, window);
+        }
     });
 }
 
 // ─────────────────────────────────────────
-// 初始化
+// 初始化模块
 // ─────────────────────────────────────────
 
 pub fn init(app: &AppHandle) -> VisualRecallState {
@@ -609,9 +779,12 @@ pub fn init(app: &AppHandle) -> VisualRecallState {
     fs::create_dir_all(screenshots_dir(&data_dir)).ok();
     init_db(&data_dir);
 
+    // 从数据库持久化中加载配置
+    let persisted_config = db_load_config(&data_dir);
+
     let inner = Arc::new(Mutex::new(VrInner {
-        config: VrConfig::default(),
-        last_hash: None,
+        config: persisted_config,
+        comparer: FrameComparer::new(),
         last_capture_secs: 0.0,
         last_window_title: String::new(),
         last_app_name: String::new(),
@@ -627,6 +800,28 @@ pub fn init(app: &AppHandle) -> VisualRecallState {
 // Tauri Commands
 // ─────────────────────────────────────────
 
+/// 检查系统屏幕录制权限
+#[tauri::command]
+pub fn visual_recall_check_permission() -> bool {
+    #[cfg(target_os = "macos")]
+    unsafe {
+        CGPreflightScreenCaptureAccess()
+    }
+    #[cfg(not(target_os = "macos"))]
+    true
+}
+
+/// 请求屏幕录制权限
+#[tauri::command]
+pub fn visual_recall_request_permission() -> bool {
+    #[cfg(target_os = "macos")]
+    unsafe {
+        CGRequestScreenCaptureAccess()
+    }
+    #[cfg(not(target_os = "macos"))]
+    true
+}
+
 #[tauri::command]
 pub fn visual_recall_get_config(state: State<'_, VisualRecallState>) -> VrConfig {
     state.0.lock().unwrap().config.clone()
@@ -636,6 +831,7 @@ pub fn visual_recall_get_config(state: State<'_, VisualRecallState>) -> VrConfig
 pub fn visual_recall_set_enabled(enabled: bool, state: State<'_, VisualRecallState>) -> VrConfig {
     let mut inner = state.0.lock().unwrap();
     inner.config.enabled = enabled;
+    db_save_config(&inner.data_path, &inner.config);
     inner.config.clone()
 }
 
@@ -652,6 +848,7 @@ pub fn visual_recall_update_config(
     if let Some(v) = max_storage_mb {
         inner.config.max_storage_mb = v;
     }
+    db_save_config(&inner.data_path, &inner.config);
     inner.config.clone()
 }
 
@@ -664,7 +861,7 @@ pub fn visual_recall_search_snapshots(
     state: State<'_, VisualRecallState>,
 ) -> VrSearchResult {
     let data_path = state.0.lock().unwrap().data_path.clone();
-    let limit = limit.unwrap_or(50);
+    let limit = limit.unwrap_or(100);
     let snapshots = db_query_by_time_range(&data_path, start_time, end_time, limit);
     let total = snapshots.len();
     VrSearchResult { snapshots, total }
@@ -688,7 +885,6 @@ pub fn visual_recall_cleanup(days_to_keep: i64, state: State<'_, VisualRecallSta
         Err(_) => return false,
     };
 
-    // 获取要删除的文件路径
     let to_delete: Vec<(String, Option<String>)> = {
         let mut stmt = match conn.prepare(
             "SELECT thumb_path, full_path FROM screen_snapshots WHERE timestamp < ?1",
@@ -703,7 +899,6 @@ pub fn visual_recall_cleanup(days_to_keep: i64, state: State<'_, VisualRecallSta
         .unwrap_or_default()
     };
 
-    // 删除文件
     for (thumb, full) in &to_delete {
         let _ = fs::remove_file(thumb);
         if let Some(f) = full {
@@ -711,7 +906,6 @@ pub fn visual_recall_cleanup(days_to_keep: i64, state: State<'_, VisualRecallSta
         }
     }
 
-    // 删除 DB 记录
     conn.execute(
         "DELETE FROM screen_snapshots WHERE timestamp < ?1",
         params![cutoff_ms],

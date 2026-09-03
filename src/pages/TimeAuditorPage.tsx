@@ -18,6 +18,7 @@ import { ProductivityHeatmap } from '@/components/ProductivityHeatmap'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { useVirtualizer } from '@tanstack/react-virtual'
+import { DateNavigator } from '@/components/ui/date-picker'
 
 // 类型定义
 interface ActivityLog {
@@ -595,57 +596,13 @@ ${lines}`
                         <p className="text-sm text-zinc-500">追踪你的应用使用时间，了解生产力分布</p>
                     </div>
                     <div className="flex gap-2 items-center">
-                        {/* 日期选择器 (统一样式) */}
-                        <Button
-                            variant="ghost"
-                            size="icon"
-                            onClick={() => {
-                                const prev = new Date(selectedDate)
-                                prev.setDate(prev.getDate() - 1)
-                                setSelectedDate(prev.toISOString().split('T')[0])
-                            }}
-                            title="前一天"
-                            className="h-9 w-9"
-                        >
-                            <ChevronLeft className="h-4 w-4" />
-                        </Button>
-                        <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-zinc-50 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 h-9">
-                            <Calendar className="h-4 w-4 text-zinc-500" />
-                            <input
-                                type="date"
-                                value={selectedDate}
-                                onChange={(e) => setSelectedDate(e.target.value)}
-                                max={new Date().toISOString().split('T')[0]}
-                                className="bg-transparent border-none outline-none text-sm font-medium w-32 p-0 focus:ring-0"
-                            />
-                        </div>
-                        <Button
-                            variant="ghost"
-                            size="icon"
-                            onClick={() => {
-                                const next = new Date(selectedDate)
-                                next.setDate(next.getDate() + 1)
-                                const todayStr = new Date().toISOString().split('T')[0]
-                                const nextStr = next.toISOString().split('T')[0]
-                                if (nextStr <= todayStr) {
-                                    setSelectedDate(nextStr)
-                                }
-                            }}
-                            disabled={selectedDate === new Date().toISOString().split('T')[0]}
-                            title="后一天"
-                            className="h-9 w-9"
-                        >
-                            <ChevronRight className="h-4 w-4" />
-                        </Button>
-                        <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => setSelectedDate(new Date().toISOString().split('T')[0])}
-                            className={`h-9 px-3 ${selectedDate === new Date().toISOString().split('T')[0] ? "bg-primary/10 text-primary hover:bg-primary/20 hover:text-primary" : ""}`}
-                        >
-                            今天
-                        </Button>
-                        <div className="w-[1px] h-6 bg-zinc-200 dark:bg-zinc-800 mx-1"></div>
+                        {/* 现代一体化日期导航器 */}
+                        <DateNavigator
+                            value={selectedDate}
+                            onChange={(_, dateStr) => setSelectedDate(dateStr)}
+                            maxDate={new Date()}
+                        />
+                        <div className="w-[1px] h-6 bg-border mx-1"></div>
                         <Button
                             variant="outline"
                             size="icon"

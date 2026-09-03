@@ -257,6 +257,8 @@ pub fn run() {
             visual_recall::visual_recall_get_storage_stats,
             visual_recall::visual_recall_cleanup,
             visual_recall::visual_recall_get_image_data,
+            visual_recall::visual_recall_check_permission,
+            visual_recall::visual_recall_request_permission,
             // Local Services
             service_manager::service_list,
             service_manager::service_status,

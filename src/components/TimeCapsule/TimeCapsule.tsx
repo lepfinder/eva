@@ -83,17 +83,34 @@ export function TimeCapsule({ isOpen, onClose, date }: TimeCapsuleProps): React.
     const animationRef = useRef<number | null>(null)
     const lastFrameTimeRef = useRef<number>(0)
 
+    // 视觉回溯截图缓存与工具函数
+    const imageCacheRef = useRef<Map<string, string>>(new Map())
+
+    const fetchSnapshotImageData = useCallback(async (path: string): Promise<string> => {
+        if (!path) return ''
+        if (imageCacheRef.current.has(path)) return imageCacheRef.current.get(path)!
+        try {
+            const dataUrl = await invoke<string>('visual_recall_get_image_data', { path })
+            imageCacheRef.current.set(path, dataUrl)
+            return dataUrl
+        } catch {
+            return ''
+        }
+    }, [])
+
     // 视觉回溯截图预览
     interface SnapshotInfo {
         id: number
         timestamp: number
+        thumbPath: string
+        fullPath?: string
         imageUrl: string
         app_name: string
         window_title: string
     }
     const [currentSnapshot, setCurrentSnapshot] = useState<SnapshotInfo | null>(null)
     const [allSnapshots, setAllSnapshots] = useState<SnapshotInfo[]>([])
-    const preloadCacheRef = useRef<Map<string, HTMLImageElement>>(new Map())
+    const [fullImageData, setFullImageData] = useState<string>('')
     const lastSnapshotIdRef = useRef<number | null>(null)
 
     // 加载活动数据
@@ -109,80 +126,110 @@ export function TimeCapsule({ isOpen, onClose, date }: TimeCapsuleProps): React.
             lastBubbleActivityRef.current = ''
             lastInsightActivityRef.current = ''
 
-            // 重置视觉回溯状态
-            setCurrentSnapshot(null)
-            lastSnapshotIdRef.current = null
-            preloadCacheRef.current.clear()
-
             setIsLoading(true)
             try {
-                console.log('[TimeCapsule] Loading data for date:', date || 'today')
-                const logs: ActivityLog[] = await invoke('activity_get_today_logs', { date })
-                console.log('[TimeCapsule] Loaded', logs.length, 'logs')
+                // 重置视觉回溯状态
+                setCurrentSnapshot(null)
+                lastSnapshotIdRef.current = null
+                imageCacheRef.current.clear()
 
-                if (logs.length === 0) {
-                    setActivities([])
-                    setIsLoading(false)
-                    return
-                }
-
-                // 预处理：合并短于 2 秒的碎片
-                const merged = mergeFragments(logs, 2)
-                console.log('[TimeCapsule] After merging:', merged.length, 'activities')
-
-                // 转换为 ActivityBlock 格式
-                const blocks: ActivityBlock[] = merged.map(log => ({
-                    id: log.id,
-                    appName: log.appName,
-                    windowTitle: log.windowTitle,
-                    startTime: log.startTime,
-                    endTime: log.endTime,
-                    duration: log.duration,
-                    category: log.category || 'unclassified',
-                    color: CATEGORY_COLORS[log.category || 'unclassified']?.primary || '#64748b',
-                    glowColor: CATEGORY_COLORS[log.category || 'unclassified']?.glow || '#94a3b8',
-                }))
-
-                console.log('[TimeCapsule] Sample block:', blocks[0])
-
-                // 计算时间范围 - 修复：基于 date 参数而非 logs 时间戳
+                // 计算时间范围基准：当天 0 点时间戳
                 let startOfDay: number
                 if (date) {
-                    // 使用传入的 date 参数（YYYY-MM-DD）
                     const [year, month, day] = date.split('-').map(Number)
                     const d = new Date(year, month - 1, day, 0, 0, 0, 0)
                     startOfDay = d.getTime()
                 } else {
-                    // 今天
                     const d = new Date()
                     d.setHours(0, 0, 0, 0)
                     startOfDay = d.getTime()
                 }
+                setStartOfDayTimestamp(startOfDay)
 
-                const minTime = Math.min(...logs.map(l => l.startTime))
-                const maxTime = Math.max(...logs.map(l => l.endTime))
-
-                console.log('[TimeCapsule] Date param:', date || 'today')
-                console.log('[TimeCapsule] startOfDay:', new Date(startOfDay).toISOString())
-                console.log('[TimeCapsule] minTime:', new Date(minTime).toISOString())
-                console.log('[TimeCapsule] maxTime:', new Date(maxTime).toISOString())
-
-                const startSeconds = Math.floor((minTime - startOfDay) / 1000)
-                const endSeconds = Math.ceil((maxTime - startOfDay) / 1000)
-
-                console.log('[TimeCapsule] Time range in seconds:', startSeconds, 'to', endSeconds)
-
-                setActivities(blocks)
-                setTimeRange({
-                    start: startSeconds,
-                    end: endSeconds
-                })
-                setCurrentTime(startSeconds)
-                setStartOfDayTimestamp(startOfDay) // 保存 startOfDay
-
-                // 视觉回溯截图预览 (在 EVA 中不可用)
+                console.log('[TimeCapsule] Loading data for date:', date || 'today')
+                let logs: ActivityLog[] = []
                 try {
-                    // visual recall not available in eva
+                    logs = await invoke('activity_get_today_logs', { date })
+                    console.log('[TimeCapsule] Loaded', logs.length, 'logs')
+                } catch (logErr) {
+                    console.warn('[TimeCapsule] activity_get_today_logs failed:', logErr)
+                }
+
+                if (logs.length > 0) {
+                    // 预处理：合并短于 2 秒的碎片
+                    const merged = mergeFragments(logs, 2)
+                    const blocks: ActivityBlock[] = merged.map(log => ({
+                        id: log.id,
+                        appName: log.appName,
+                        windowTitle: log.windowTitle,
+                        startTime: log.startTime,
+                        endTime: log.endTime,
+                        duration: log.duration,
+                        category: log.category || 'unclassified',
+                        color: CATEGORY_COLORS[log.category || 'unclassified']?.primary || '#64748b',
+                        glowColor: CATEGORY_COLORS[log.category || 'unclassified']?.glow || '#94a3b8',
+                    }))
+
+                    const minTime = Math.min(...logs.map(l => l.startTime))
+                    const maxTime = Math.max(...logs.map(l => l.endTime))
+                    const startSeconds = Math.max(0, Math.floor((minTime - startOfDay) / 1000))
+                    const endSeconds = Math.min(86400, Math.ceil((maxTime - startOfDay) / 1000))
+
+                    setActivities(blocks)
+                    setTimeRange({
+                        start: startSeconds,
+                        end: Math.max(startSeconds + 60, endSeconds)
+                    })
+                    setCurrentTime(startSeconds)
+                } else {
+                    setActivities([])
+                }
+
+                // 加载当天的视觉回溯截图
+                try {
+                    console.log(`[TimeCapsule] Requesting snapshots: ${startOfDay} to ${startOfDay + 86400 * 1000}`)
+                    const response = await invoke<{ snapshots: any[]; total: number }>(
+                        'visual_recall_search_snapshots',
+                        {
+                            startTime: startOfDay,
+                            endTime: startOfDay + 86400 * 1000,
+                            limit: 5000
+                        }
+                    )
+                    if (response?.snapshots && response.snapshots.length > 0) {
+                        const sorted = response.snapshots.sort((a, b) => a.timestamp - b.timestamp)
+                        const mapped: SnapshotInfo[] = sorted.map(s => ({
+                            id: s.id,
+                            timestamp: s.timestamp,
+                            thumbPath: s.thumbPath,
+                            fullPath: s.fullPath,
+                            imageUrl: imageCacheRef.current.get(s.thumbPath) || '',
+                            app_name: s.appName || '',
+                            window_title: s.windowTitle || ''
+                        }))
+                        setAllSnapshots(mapped)
+                        console.log('[TimeCapsule] Loaded', mapped.length, 'visual recall snapshots')
+
+                        // 如果之前没有活动日志，但有截图，则基于截图时间确定播放区间
+                        if (logs.length === 0) {
+                            const minSnap = sorted[0].timestamp
+                            const maxSnap = sorted[sorted.length - 1].timestamp
+                            const startSeconds = Math.max(0, Math.floor((minSnap - startOfDay) / 1000))
+                            const endSeconds = Math.min(86400, Math.ceil((maxSnap - startOfDay) / 1000))
+                            setTimeRange({
+                                start: startSeconds,
+                                end: Math.max(startSeconds + 60, endSeconds)
+                            })
+                            setCurrentTime(startSeconds)
+                        }
+
+                        // 预拉取前 6 张
+                        mapped.slice(0, 6).forEach(s => {
+                            if (s.thumbPath) fetchSnapshotImageData(s.thumbPath)
+                        })
+                    } else {
+                        setAllSnapshots([])
+                    }
                 } catch (err) {
                     console.warn('[TimeCapsule] Failed to load visual recall snapshots:', err)
                 }
@@ -197,7 +244,7 @@ export function TimeCapsule({ isOpen, onClose, date }: TimeCapsuleProps): React.
         }
 
         loadData()
-    }, [isOpen, date])
+    }, [isOpen, date, fetchSnapshotImageData])
 
     // 根据当前时间更新截图 + 预加载
     useEffect(() => {
@@ -226,26 +273,29 @@ export function TimeCapsule({ isOpen, onClose, date }: TimeCapsuleProps): React.
             // 只有切换到新截图时才更新
             if (closest.id !== lastSnapshotIdRef.current) {
                 lastSnapshotIdRef.current = closest.id
-                setCurrentSnapshot(closest)
-
-                // 预加载后续截图
-                const preloadCount = playbackSpeed >= 16 ? 10 : 5
-                for (let i = 1; i <= preloadCount; i++) {
-                    const nextSnapshot = allSnapshots[closestIndex + i]
-                    if (nextSnapshot && nextSnapshot.imageUrl) {
-                        if (!preloadCacheRef.current.has(nextSnapshot.imageUrl)) {
-                            const img = new Image()
-                            img.src = nextSnapshot.imageUrl
-                            preloadCacheRef.current.set(nextSnapshot.imageUrl, img)
+                
+                // 加载图片
+                if (closest.imageUrl) {
+                    setCurrentSnapshot(closest)
+                } else if (closest.thumbPath && imageCacheRef.current.has(closest.thumbPath)) {
+                    const cachedUrl = imageCacheRef.current.get(closest.thumbPath)!
+                    closest.imageUrl = cachedUrl
+                    setCurrentSnapshot({ ...closest, imageUrl: cachedUrl })
+                } else if (closest.thumbPath) {
+                    fetchSnapshotImageData(closest.thumbPath).then(dataUrl => {
+                        if (lastSnapshotIdRef.current === closest.id) {
+                            closest.imageUrl = dataUrl
+                            setCurrentSnapshot({ ...closest, imageUrl: dataUrl })
                         }
-                    }
+                    })
                 }
 
-                // 限制缓存大小（保留最近 20 张）
-                if (preloadCacheRef.current.size > 20) {
-                    const entries = Array.from(preloadCacheRef.current.keys())
-                    for (let i = 0; i < entries.length - 20; i++) {
-                        preloadCacheRef.current.delete(entries[i])
+                // 预加载后续截图
+                const preloadCount = playbackSpeed >= 16 ? 12 : 6
+                for (let i = 1; i <= preloadCount; i++) {
+                    const nextSnapshot = allSnapshots[closestIndex + i]
+                    if (nextSnapshot && nextSnapshot.thumbPath) {
+                        fetchSnapshotImageData(nextSnapshot.thumbPath)
                     }
                 }
             }
@@ -256,7 +306,20 @@ export function TimeCapsule({ isOpen, onClose, date }: TimeCapsuleProps): React.
             if (firstSnapshot && (firstSnapshot.timestamp - currentTimestamp < 60 * 1000)) {
                 if (firstSnapshot.id !== lastSnapshotIdRef.current) {
                     lastSnapshotIdRef.current = firstSnapshot.id
-                    setCurrentSnapshot(firstSnapshot)
+                    if (firstSnapshot.imageUrl) {
+                        setCurrentSnapshot(firstSnapshot)
+                    } else if (firstSnapshot.thumbPath && imageCacheRef.current.has(firstSnapshot.thumbPath)) {
+                        const cachedUrl = imageCacheRef.current.get(firstSnapshot.thumbPath)!
+                        firstSnapshot.imageUrl = cachedUrl
+                        setCurrentSnapshot({ ...firstSnapshot, imageUrl: cachedUrl })
+                    } else if (firstSnapshot.thumbPath) {
+                        fetchSnapshotImageData(firstSnapshot.thumbPath).then(dataUrl => {
+                            if (lastSnapshotIdRef.current === firstSnapshot.id) {
+                                firstSnapshot.imageUrl = dataUrl
+                                setCurrentSnapshot({ ...firstSnapshot, imageUrl: dataUrl })
+                            }
+                        })
+                    }
                 }
             } else {
                 // 否则清除截图（避免显示上一轮会话的残留图片，或者 Seek 到开头时显示旧图）
@@ -266,7 +329,23 @@ export function TimeCapsule({ isOpen, onClose, date }: TimeCapsuleProps): React.
                 }
             }
         }
-    }, [currentTime, allSnapshots, startOfDayTimestamp, playbackSpeed])
+    }, [currentTime, allSnapshots, startOfDayTimestamp, playbackSpeed, fetchSnapshotImageData])
+
+    // 大图预览按需异步拉取清晰大图
+    useEffect(() => {
+        if (showFullImage && currentSnapshot) {
+            const targetPath = currentSnapshot.fullPath || currentSnapshot.thumbPath
+            if (targetPath) {
+                fetchSnapshotImageData(targetPath).then(dataUrl => {
+                    setFullImageData(dataUrl)
+                })
+            } else {
+                setFullImageData(currentSnapshot.imageUrl || '')
+            }
+        } else {
+            setFullImageData('')
+        }
+    }, [showFullImage, currentSnapshot, fetchSnapshotImageData])
 
     // 合并碎片活动 - 只合并同一应用的连续片段
     function mergeFragments(logs: ActivityLog[], _minDuration: number): ActivityLog[] {
@@ -677,12 +756,13 @@ export function TimeCapsule({ isOpen, onClose, date }: TimeCapsuleProps): React.
                 <AnimatePresence mode="sync">
                     {currentSnapshot && currentSnapshot.imageUrl && (() => {
                         // 计算时间线位置（百分比）
-                        const timelineProgress = ((currentTime - timeRange.start) / (timeRange.end - timeRange.start)) * 100
-                        // 限制预览窗口不超出屏幕边界
-                        const leftPercent = Math.min(Math.max(timelineProgress, 5), 65)
+                        const range = timeRange.end - timeRange.start
+                        const timelineProgress = range > 0
+                            ? Math.min(100, Math.max(0, ((currentTime - timeRange.start) / range) * 100))
+                            : 0
 
-                        // 动态 3D 旋转：根据位置计算 rotateY
-                        const rotateY = (leftPercent - 35) * 0.2 // -6deg 到 +6deg
+                        // 动态 3D 旋转：根据在时间轴上的进度计算微弱偏转 (-6deg 到 +6deg)
+                        const rotateY = (timelineProgress - 50) * 0.12
 
                         // Warp 模式运动模糊
                         const warpBlur = playbackSpeed >= 256 ? Math.min((playbackSpeed - 256) * 0.008, 3) : 0
@@ -693,7 +773,7 @@ export function TimeCapsule({ isOpen, onClose, date }: TimeCapsuleProps): React.
                                 className={`absolute z-50 ${!isPlaying ? 'pointer-events-auto cursor-pointer' : 'pointer-events-none'}`}
                                 style={{
                                     top: '90px',
-                                    left: `calc(${leftPercent}% - 130px)`,
+                                    left: `clamp(32px, calc(${timelineProgress}% - 130px), calc(100% - 292px))`,
                                     width: '260px',
                                     perspective: '1000px',
                                 }}
@@ -791,7 +871,7 @@ export function TimeCapsule({ isOpen, onClose, date }: TimeCapsuleProps): React.
                             onClick={() => setShowFullImage(false)}
                         >
                             <motion.img
-                                src={`${currentSnapshot.imageUrl}?type=full`}
+                                src={fullImageData || currentSnapshot.imageUrl}
                                 alt="Full screen capture"
                                 className="max-w-[90vw] max-h-[90vh] object-contain rounded-lg shadow-2xl"
                                 initial={{ scale: 0.8, opacity: 0 }}
