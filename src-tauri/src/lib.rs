@@ -2,6 +2,7 @@ pub mod activity_tracker;
 pub mod ai;
 pub mod clipboard;
 pub mod env_detector;
+pub mod hotkeys;
 pub mod http_server;
 pub mod local_ports;
 pub mod memory_analyzer;
@@ -15,7 +16,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{Manager, RunEvent, WindowEvent};
+use tauri::{Emitter, Manager, RunEvent, WindowEvent};
+use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 
 static LAST_TRAY_CLICK_MS: AtomicU64 = AtomicU64::new(0);
 
@@ -36,6 +38,9 @@ fn open_main_window(app: tauri::AppHandle) {
     if let Some(tray_win) = app.get_webview_window("tray-receipt") {
         let _ = tray_win.hide();
     }
+    if let Some(hub) = app.get_webview_window("hub") {
+        let _ = hub.hide();
+    }
 }
 
 #[tauri::command]
@@ -45,12 +50,26 @@ fn tray_hide_receipt_window(app: tauri::AppHandle) {
     }
 }
 
+#[tauri::command]
+fn hub_hide(app: tauri::AppHandle) {
+    if let Some(hub) = app.get_webview_window("hub") {
+        hotkeys::LAST_HUB_MODE.store(0, Ordering::Relaxed);
+        let _ = hub.hide();
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let app = tauri::Builder::default()
         .on_window_event(|window, event| {
             if window.label() == "tray-receipt" {
                 if let WindowEvent::Focused(false) = event {
+                    let _ = window.hide();
+                }
+            }
+            if window.label() == "hub" {
+                if let WindowEvent::Focused(false) = event {
+                    hotkeys::LAST_HUB_MODE.store(0, Ordering::Relaxed);
                     let _ = window.hide();
                 }
             }
@@ -119,6 +138,7 @@ pub fn run() {
                         if let Some(win) = app.get_webview_window("tray-receipt") {
                             let _ = win.show();
                             let _ = win.set_focus();
+                            let _ = win.emit("tray-receipt-show", ());
                         }
                     }
                     "open_main" => {
@@ -158,17 +178,48 @@ pub fn run() {
                                 let _ = win.set_position(tauri::LogicalPosition::new(x, y));
                                 let _ = win.show();
                                 let _ = win.set_focus();
+                                let _ = win.emit("tray-receipt-show", ());
                             }
                         }
                     }
                 })
                 .build(app)?;
 
+            // Initialise Dynamic Global Shortcuts
+            let hotkey_map: hotkeys::HotkeyActionMap = std::collections::HashMap::new();
+            let shared_hotkey_state: hotkeys::SharedHotkeyState =
+                std::sync::Arc::new(std::sync::RwLock::new(hotkey_map));
+            app.manage(shared_hotkey_state);
+
+            let global_shortcut_plugin = tauri_plugin_global_shortcut::Builder::new()
+                .with_handler(move |app, shortcut, event| {
+                    if event.state() == ShortcutState::Pressed {
+                        if let Some(state) = app.try_state::<hotkeys::SharedHotkeyState>() {
+                            if let Ok(guard) = state.read() {
+                                if let Some(action) = guard.get(shortcut) {
+                                    hotkeys::handle_hotkey_action(app, *action);
+                                }
+                            }
+                        }
+                    }
+                })
+                .build();
+            app.handle().plugin(global_shortcut_plugin)?;
+
+            // Load and apply configured hotkeys dynamically
+            let current_hotkeys = hotkeys::load_saved_hotkeys(app.handle());
+            let _ = hotkeys::apply_hotkeys(app.handle(), &current_hotkeys);
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             open_main_window,
             tray_hide_receipt_window,
+            hub_hide,
+            // Hotkeys
+            hotkeys::hotkeys_get_all,
+            hotkeys::hotkeys_save_all,
+            hotkeys::hotkeys_reset_all,
             // Navigation
             navigation::get_navigation_data,
             navigation::save_navigation_data,

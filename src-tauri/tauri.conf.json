@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "EVA",
-  "version": "0.1.5",
+  "version": "0.1.8",
   "identifier": "com.xiyangxie.eva",
   "build": {
     "frontendDist": "../dist",
@@ -39,6 +39,22 @@
         "skipTaskbar": true,
         "visible": false,
         "shadow": true
+      },
+      {
+        "label": "hub",
+        "title": "EVA Quick HUB",
+        "url": "index.html?window=hub",
+        "width": 640,
+        "height": 480,
+        "resizable": false,
+        "fullscreen": false,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "visible": false,
+        "shadow": true,
+        "center": true
       }
     ],
     "security": {

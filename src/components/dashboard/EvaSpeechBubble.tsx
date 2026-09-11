@@ -15,6 +15,15 @@ interface ProjectStat {
     percentage: number
 }
 
+interface ActivityLog {
+    startTime: number
+    endTime: number
+    appName: string
+    windowTitle: string
+    category?: string
+    projectName?: string
+}
+
 const CACHE_KEY = 'eva_companion_speech_cache_v1'
 const CACHE_TIME_KEY = 'eva_companion_speech_time_v1'
 const CACHE_TTL_MS = 45 * 60 * 1000 // 45 分钟缓存过期

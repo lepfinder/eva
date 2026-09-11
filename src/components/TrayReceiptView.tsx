@@ -9,7 +9,7 @@ import { toPng } from 'html-to-image'
 import { Download, Copy, Check, Sparkles, RefreshCw, ExternalLink, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Barcode } from '@/components/Barcode'
-import { formatDurationShort, balanceReceiptDurations } from '@/lib/receiptHelper'
+import { formatDurationShort, balanceReceiptDurations, computeAwayStats, formatMinutes } from '@/lib/receiptHelper'
 
 interface AppStat {
     appName: string
@@ -116,6 +116,14 @@ function playPrintSound() {
     }
 }
 
+function getLocalDateStr(d: Date = new Date()): string {
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
+function getLocalTimeStr(d: Date = new Date()): string {
+    return d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true })
+}
+
 export function TrayReceiptView() {
     const receiptRef = useRef<HTMLDivElement>(null)
     const [loading, setLoading] = useState(true)
@@ -131,8 +139,8 @@ export function TrayReceiptView() {
     const [totalDuration, setTotalDuration] = useState(0)
     const [logs, setLogs] = useState<ActivityLog[]>([])
     const [summary, setSummary] = useState('')
-
-    const todayStr = useMemo(() => new Date().toISOString().split('T')[0], [])
+    const [dateStr, setDateStr] = useState<string>(getLocalDateStr)
+    const [printTimeStr, setPrintTimeStr] = useState<string>(getLocalTimeStr)
 
     // 确保整个 WebView 背景 100% 透明，不留下白底
     useEffect(() => {
@@ -146,19 +154,24 @@ export function TrayReceiptView() {
 
     // 加载今日数据
     const loadTodayData = async () => {
+        const curDate = getLocalDateStr()
+        setDateStr(curDate)
+        setPrintTimeStr(getLocalTimeStr())
         try {
             setLoading(true)
             const [s, t, l, sum] = await Promise.all([
-                invoke<AppStat[]>('activity_get_today_stats', { date: todayStr }),
-                invoke<number>('activity_get_today_total_duration', { date: todayStr }),
-                invoke<ActivityLog[]>('activity_get_today_logs', { date: todayStr }),
-                invoke<{ content: string } | null>('activity_get_daily_summary', { date: todayStr }).catch(() => null)
+                invoke<AppStat[]>('activity_get_today_stats', { date: curDate }),
+                invoke<number>('activity_get_today_total_duration', { date: curDate }),
+                invoke<ActivityLog[]>('activity_get_today_logs', { date: curDate }),
+                invoke<{ content: string } | null>('activity_get_daily_summary', { date: curDate }).catch(() => null)
             ])
             setStats(s || [])
             setTotalDuration(t || 0)
             setLogs(l || [])
             if (sum && sum.content) {
                 setSummary(sum.content)
+            } else {
+                setSummary('')
             }
         } catch (e) {
             console.error('Failed to load tray receipt data:', e)
@@ -170,6 +183,7 @@ export function TrayReceiptView() {
     useEffect(() => {
         playPrintSound()
         loadTodayData()
+
         const onFocus = () => {
             setIsTorn(false)
             setPrintKey(k => k + 1)
@@ -177,7 +191,25 @@ export function TrayReceiptView() {
             loadTodayData()
         }
         window.addEventListener('focus', onFocus)
-        return () => window.removeEventListener('focus', onFocus)
+
+        let unlisten: (() => void) | undefined
+        import('@tauri-apps/api/event').then(({ listen }) => {
+            listen('tray-receipt-show', () => {
+                setIsTorn(false)
+                setPrintKey(k => k + 1)
+                playPrintSound()
+                loadTodayData()
+            }).then(u => {
+                unlisten = u
+            })
+        }).catch(err => {
+            console.error('Failed to listen to tray-receipt-show:', err)
+        })
+
+        return () => {
+            window.removeEventListener('focus', onFocus)
+            if (unlisten) unlisten()
+        }
     }, [])
 
     const receiptData = useMemo(() => {
@@ -228,13 +260,20 @@ export function TrayReceiptView() {
             }
         }
 
-        const dateObj = new Date()
+        const [y, m, d] = dateStr.split('-').map(Number)
+        const dateObj = new Date(y, (m || 1) - 1, d || 1)
         const dateFormatted = dateObj.toLocaleDateString('en-US', {
             weekday: 'short',
             month: 'short',
             day: '2-digit',
             year: 'numeric'
         }).toUpperCase()
+
+        const awayStats = computeAwayStats(logs, dateStr)
+        const screenMins = Math.max(0, Math.round(totalDuration / 60))
+        const awayMins = Math.max(0, Math.round(awayStats.totalDuration / 60))
+        const totalDayFormatted = formatMinutes(screenMins + awayMins)
+        const awayFormatted = formatMinutes(awayMins)
 
         return {
             topApps: balancedTopApps,
@@ -248,9 +287,12 @@ export function TrayReceiptView() {
             longestFocus,
             cleanAiSnippet,
             dateFormatted,
-            logCount: logs.length
+            logCount: logs.length,
+            awayStats,
+            awayFormatted,
+            totalDayFormatted,
         }
-    }, [stats, logs, totalDuration, summary])
+    }, [stats, logs, totalDuration, summary, dateStr])
 
     // 保存 PNG
     const handleDownloadPng = async () => {
@@ -263,7 +305,7 @@ export function TrayReceiptView() {
                 backgroundColor: '#18181b', // 导出时衬底深色背景
             })
             const link = document.createElement('a')
-            link.download = `eva-receipt-${todayStr}.png`
+            link.download = `eva-receipt-${dateStr}.png`
             link.href = dataUrl
             link.click()
         } catch (err) {
@@ -428,7 +470,7 @@ export function TrayReceiptView() {
                         <div className="border-b border-dashed border-zinc-400 pb-1 mb-1.5 text-[9px] text-zinc-600 leading-normal">
                             <div className="flex justify-between">
                                 <span>{receiptData.dateFormatted}</span>
-                                <span>{new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true })}</span>
+                                <span>{printTimeStr}</span>
                             </div>
                             <div className="flex justify-between">
                                 <span>CASHIER: YOU</span>
@@ -502,11 +544,28 @@ export function TrayReceiptView() {
                         </div>
 
                         {/* 结算 */}
-                        <div className="border-t-2 border-zinc-800 pt-1.5 mb-1.5">
-                            <div className="flex justify-between text-[11px] font-bold">
-                                <span>SUBTOTAL</span>
-                                <span>{receiptData.subtotalFormatted}</span>
-                            </div>
+                        <div className="border-t-2 border-zinc-800 pt-1.5 mb-1.5 space-y-0.5">
+                            {receiptData.awayStats.totalDuration > 0 ? (
+                                <>
+                                    <div className="flex justify-between text-[9px] text-zinc-600 font-medium">
+                                        <span>SCREEN ACTIVE</span>
+                                        <span className="font-semibold text-zinc-800">{receiptData.subtotalFormatted}</span>
+                                    </div>
+                                    <div className="flex justify-between text-[9px] text-amber-700 font-medium">
+                                        <span>☕ REST & AWAY ({receiptData.awayStats.count} BREAK{receiptData.awayStats.count > 1 ? 'S' : ''})</span>
+                                        <span className="font-semibold">{receiptData.awayFormatted}</span>
+                                    </div>
+                                    <div className="border-t border-dashed border-zinc-400 pt-1 mt-0.5 flex justify-between text-[11px] font-bold text-zinc-900">
+                                        <span>TOTAL DAY</span>
+                                        <span>{receiptData.totalDayFormatted}</span>
+                                    </div>
+                                </>
+                            ) : (
+                                <div className="flex justify-between text-[11px] font-bold">
+                                    <span>SUBTOTAL</span>
+                                    <span>{receiptData.subtotalFormatted}</span>
+                                </div>
+                            )}
                             <div className="text-[8px] text-zinc-500 uppercase tracking-widest mt-0.5">
                                 DOORS LOCKED. GO HOME.
                             </div>
@@ -548,14 +607,14 @@ export function TrayReceiptView() {
                     {/* 纸张底部的条形码 & 编号 */}
                     <div className="shrink-0 pt-1.5 border-t border-dashed border-zinc-400 text-center flex flex-col items-center">
                         <Barcode
-                            value={`${todayStr.replace(/-/g, '')}-EVA`}
+                            value={`${dateStr.replace(/-/g, '')}-EVA`}
                             height={24}
                             narrowWidth={1.1}
                             wideRatio={2.3}
                             className="my-0.5"
                         />
                         <div className="text-[8px] tracking-widest text-zinc-500 mb-0.5">
-                            NO. {todayStr.replace(/-/g, '')}-EVA
+                            NO. {dateStr.replace(/-/g, '')}-EVA
                         </div>
                         <div className="text-[8px] font-bold text-zinc-700">
                             THANK YOU FOR WORKING WITH YOURSELF

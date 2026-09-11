@@ -88,3 +88,86 @@ export function balanceReceiptDurations(
         subtotalFormatted: formatMinutes(targetTotalMins),
     }
 }
+
+export interface AwayStats {
+    totalDuration: number
+    count: number
+}
+
+/**
+ * 分析活动日志中的空白时段，提取工间休息 / 离席统计（排除夜间休眠与长时间离线）
+ */
+export function computeAwayStats(
+    logs: Array<{ startTime: number; endTime: number }>,
+    dateStr: string
+): AwayStats {
+    if (!logs || logs.length === 0) {
+        return { totalDuration: 0, count: 0 }
+    }
+
+    const sortedLogs = [...logs].sort((a, b) => a.startTime - b.startTime)
+    const dayStartMs = new Date(dateStr + 'T00:00:00').getTime()
+    const dayEndMs = dayStartMs + 24 * 3600 * 1000
+    const now = Date.now()
+    const isToday = new Date().toDateString() === new Date(dateStr + 'T00:00:00').toDateString()
+    const effectiveEndMs = isToday ? Math.min(now, dayEndMs) : dayEndMs
+
+    const classifyGap = (gapStart: number, gapEnd: number) => {
+        const durationSec = Math.round((gapEnd - gapStart) / 1000)
+        if (durationSec < 600) return null // 小于10分钟忽略
+
+        const startHour = new Date(gapStart).getHours()
+        const endHour = new Date(gapEnd).getHours()
+
+        // 1. 夜间睡眠判定
+        const isNight = (startHour >= 23 || startHour < 6) && (endHour <= 9 || gapEnd - gapStart > 4 * 3600 * 1000)
+        if (isNight && durationSec >= 3600) {
+            return 'offline'
+        }
+
+        // 2. 超长离线（持续超过 3.5 小时）
+        if (durationSec > 3.5 * 3600) {
+            return 'offline'
+        }
+
+        // 3. 下班后离线判定
+        const isAfterWork =
+            (startHour >= 20 && durationSec >= 3600) ||
+            (startHour >= 19 && durationSec >= 2 * 3600)
+        if (isAfterWork) {
+            return 'offline'
+        }
+
+        // 4. 正常工间离席
+        return 'away'
+    }
+
+    let awayDurationSum = 0
+    let awayCount = 0
+
+    let curEnd = sortedLogs[0].endTime
+    for (let i = 1; i < sortedLogs.length; i++) {
+        const nextLog = sortedLogs[i]
+        if (nextLog.startTime > curEnd + 10 * 60 * 1000) {
+            if (classifyGap(curEnd, nextLog.startTime) === 'away') {
+                const dur = Math.round((nextLog.startTime - curEnd) / 1000)
+                awayDurationSum += dur
+                awayCount += 1
+            }
+        }
+        if (nextLog.endTime > curEnd) {
+            curEnd = nextLog.endTime
+        }
+    }
+
+    if (effectiveEndMs > curEnd + 10 * 60 * 1000) {
+        if (classifyGap(curEnd, effectiveEndMs) === 'away') {
+            const dur = Math.round((effectiveEndMs - curEnd) / 1000)
+            awayDurationSum += dur
+            awayCount += 1
+        }
+    }
+
+    return { totalDuration: awayDurationSum, count: awayCount }
+}
+

@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { getCurrentWindow } from '@tauri-apps/api/window'
+import { listen } from '@tauri-apps/api/event'
 import { Sidebar, NavItem } from './Sidebar'
 import { DashboardPage } from '@/pages/DashboardPage'
 import { SettingsPage } from '@/pages/SettingsPage'
@@ -103,6 +104,21 @@ export function MainLayoutContents(): React.ReactElement {
     return () => {
       window.removeEventListener('navigate-to-tool', handleNavigateToTool)
       window.removeEventListener('navigate-to-page', handleNavigateToPage)
+    }
+  }, [])
+
+  // 监听 Tauri 后端全局快捷键分发的动作 (Option + V -> 剪贴板, Option + K -> 命令面板)
+  useEffect(() => {
+    const unlistenPromise = listen<string>('eva://global-action', (event) => {
+      if (event.payload === 'open-clipboard') {
+        setActiveNav('clipboard')
+      } else if (event.payload === 'open-command-palette') {
+        window.dispatchEvent(new CustomEvent('open-command-palette'))
+      }
+    })
+
+    return () => {
+      unlistenPromise.then((unlisten) => unlisten())
     }
   }, [])
 

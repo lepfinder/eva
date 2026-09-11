@@ -10,7 +10,7 @@ import { Download, Copy, Check, Sparkles, RefreshCw, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogOverlay, DialogPortal } from '@/components/ui/dialog'
 import { Barcode } from '@/components/Barcode'
-import { formatDurationShort, balanceReceiptDurations } from '@/lib/receiptHelper'
+import { formatDurationShort, balanceReceiptDurations, computeAwayStats, formatMinutes } from '@/lib/receiptHelper'
 
 export interface TimeReceiptProps {
     open: boolean
@@ -20,6 +20,7 @@ export interface TimeReceiptProps {
     appStats: Array<{ appName: string; totalDuration: number; percentage: number }>
     logs?: Array<{ appName: string; windowTitle: string; startTime: number; endTime: number; duration: number }>
     summary?: string
+    awayStats?: { totalDuration: number; count: number }
 }
 
 // 生成 6 位等宽字符柱状图 (例如 ▓▓▓░░░)
@@ -45,7 +46,8 @@ export function TimeReceipt({
     totalDuration,
     appStats,
     logs = [],
-    summary = ''
+    summary = '',
+    awayStats: propAwayStats,
 }: TimeReceiptProps) {
     const receiptRef = useRef<HTMLDivElement>(null)
     const [downloading, setDownloading] = useState(false)
@@ -117,6 +119,12 @@ export function TimeReceipt({
             year: 'numeric'
         }).toUpperCase()
 
+        const effectiveAwayStats = propAwayStats || computeAwayStats(logs, selectedDate)
+        const screenMins = Math.max(0, Math.round(totalDuration / 60))
+        const awayMins = Math.max(0, Math.round(effectiveAwayStats.totalDuration / 60))
+        const totalDayFormatted = formatMinutes(screenMins + awayMins)
+        const awayFormatted = formatMinutes(awayMins)
+
         return {
             topApps: balancedTopApps,
             hasMisc,
@@ -129,9 +137,12 @@ export function TimeReceipt({
             longestFocus,
             cleanAiSnippet,
             dateFormatted,
-            logCount: logs.length
+            logCount: logs.length,
+            awayStats: effectiveAwayStats,
+            awayFormatted,
+            totalDayFormatted,
         }
-    }, [appStats, logs, totalDuration, selectedDate, summary])
+    }, [appStats, logs, totalDuration, selectedDate, summary, propAwayStats])
 
     // 保存为 PNG 图片
     const handleDownloadPng = async () => {
@@ -335,11 +346,28 @@ export function TimeReceipt({
                                     </div>
 
                                     {/* 总结结算 */}
-                                    <div className="border-t-2 border-zinc-800 pt-2 mb-4 text-[11px]">
-                                        <div className="flex justify-between text-xs font-bold mb-1">
-                                            <span>SUBTOTAL</span>
-                                            <span>{receiptData.subtotalFormatted}</span>
-                                        </div>
+                                    <div className="border-t-2 border-zinc-800 pt-2 mb-4 text-[11px] space-y-1">
+                                        {receiptData.awayStats.totalDuration > 0 ? (
+                                            <>
+                                                <div className="flex justify-between text-[11px] text-zinc-600 font-medium">
+                                                    <span>SCREEN ACTIVE</span>
+                                                    <span className="font-semibold text-zinc-800 dark:text-zinc-200">{receiptData.subtotalFormatted}</span>
+                                                </div>
+                                                <div className="flex justify-between text-[11px] text-amber-700 font-medium">
+                                                    <span>☕ REST & AWAY ({receiptData.awayStats.count} BREAK{receiptData.awayStats.count > 1 ? 'S' : ''})</span>
+                                                    <span className="font-semibold">{receiptData.awayFormatted}</span>
+                                                </div>
+                                                <div className="border-t border-dashed border-zinc-400 pt-1 mt-1 flex justify-between text-xs font-bold text-zinc-900 dark:text-zinc-100">
+                                                    <span>TOTAL DAY</span>
+                                                    <span>{receiptData.totalDayFormatted}</span>
+                                                </div>
+                                            </>
+                                        ) : (
+                                            <div className="flex justify-between text-xs font-bold mb-1">
+                                                <span>SUBTOTAL</span>
+                                                <span>{receiptData.subtotalFormatted}</span>
+                                            </div>
+                                        )}
                                         <div className="text-[10px] font-semibold text-zinc-700 leading-tight">
                                             TOTAL: 1 (ONE) WORKDAY
                                         </div>

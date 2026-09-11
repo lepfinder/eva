@@ -1,6 +1,6 @@
 [package]
 name = "eva"
-version = "0.1.5"
+version = "0.1.8"
 description = "EVA Desktop Context & Intelligence System for AI Agents"
 authors = ["xiyangxie"]
 license = "MIT"
@@ -33,6 +33,7 @@ serde = { version = "1.0", features = ["derive"] }
 log = "0.4"
 tauri = { version = "2.10.3", features = ["protocol-asset", "tray-icon"] }
 tauri-plugin-log = "2"
+tauri-plugin-global-shortcut = "2"
 reqwest = { version = "0.12", features = ["rustls-tls"], default-features = false }
 base64 = "0.22"
 dirs = "5"

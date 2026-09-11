@@ -90,6 +90,17 @@ export function CommandPaletteModal(): React.ReactElement | null {
         return () => window.removeEventListener('keydown', handleKeyDown)
     }, [open])
 
+    // 监听外部打开命令面板事件 (如全局快捷键 Option+K)
+    useEffect(() => {
+        const handleOpenCommandPalette = () => {
+            setOpen(true)
+            setQuery('')
+            setSelectedIndex(0)
+        }
+        window.addEventListener('open-command-palette', handleOpenCommandPalette)
+        return () => window.removeEventListener('open-command-palette', handleOpenCommandPalette)
+    }, [])
+
     // 打开时自动聚焦并抓取端口列表
     useEffect(() => {
         if (open) {

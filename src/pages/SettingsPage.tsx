@@ -37,6 +37,8 @@ import {
   CheckCircle2,
   XCircle,
   ExternalLink,
+  LayoutDashboard,
+  RotateCcw,
 } from 'lucide-react'
 
 // 存储统计类型
@@ -242,78 +244,204 @@ export function SettingsPage(): React.ReactElement {
     }
   }
 
-  // 快捷键配置
-  const [hotkeys, setHotkeys] = useState<Record<string, string>>({})
-  const [editingKey, setEditingKey] = useState<string | null>(null)
-  const [recordingKeys, setRecordingKeys] = useState<string[]>([])
-  const [hotkeyError, setHotkeyError] = useState<string | null>(null)
-
-  // 快捷键名称映射
-  const hotkeyLabels: Record<string, string> = {
-    moduleVault: '跳转保险箱',
-    moduleTimeAuditor: '跳转时间审计',
-    timeMark: '快速时间标记'
+  // ── 全局快捷键状态与配置 ──────────────────────────────────────
+  interface HotkeyItem {
+    id: string
+    name: string
+    description: string
+    shortcut: string
+    defaultShortcut: string
+    enabled: boolean
   }
 
-  // 加载配置
-  useEffect(() => {
-    window.api.hotkeys.getAll().then(setHotkeys)
+  const [hotkeyItems, setHotkeyItems] = useState<HotkeyItem[]>([
+    {
+      id: 'toggle_main',
+      name: '唤起 / 隐藏 EVA 主窗口',
+      description: '在任何外部软件下呼出或快速隐藏 EVA 工作台主窗口',
+      shortcut: 'Alt+KeyE',
+      defaultShortcut: 'Alt+KeyE',
+      enabled: true
+    },
+    {
+      id: 'hub_clipboard',
+      name: '剪贴板历史浮窗 (HUB)',
+      description: '弹出轻量剪贴板悬浮面板，支持方向键或 1~9 快捷选用写回',
+      shortcut: 'Alt+KeyV',
+      defaultShortcut: 'Alt+KeyV',
+      enabled: true
+    },
+    {
+      id: 'hub_command',
+      name: '快捷命令与端口搜索 (HUB)',
+      description: '弹出轻量快速面板，支持端口查询、一键 Kill 释放与即时速算',
+      shortcut: 'Alt+KeyK',
+      defaultShortcut: 'Alt+KeyK',
+      enabled: true
+    }
+  ])
+  const [editingHotkeyId, setEditingHotkeyId] = useState<string | null>(null)
+  const [recordedKeys, setRecordedKeys] = useState<string[]>([])
+  const [hotkeyMessage, setHotkeyMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null)
+  const [savingHotkeys, setSavingHotkeys] = useState(false)
+
+  // 格式化展示按键名称
+  const formatShortcutDisplay = (shortcut: string): string[] => {
+    if (!shortcut || !shortcut.trim()) return ['未设置']
+    return shortcut.split('+').map(part => {
+      if (part === 'Alt') return '⌥'
+      if (part === 'CommandOrControl' || part === 'Super' || part === 'Command') return '⌘'
+      if (part === 'Shift') return '⇧'
+      if (part === 'Control') return '⌃'
+      if (part.startsWith('Key')) return part.slice(3).toUpperCase()
+      if (part.startsWith('Digit')) return part.slice(5)
+      return part
+    })
+  }
+
+  // 加载快捷键
+  const loadHotkeys = useCallback(async () => {
+    try {
+      if (window.api?.hotkeys?.getAll) {
+        const res = await window.api.hotkeys.getAll()
+        if (Array.isArray(res) && res.length > 0) {
+          setHotkeyItems(res)
+        }
+      }
+    } catch (e) {
+      console.error('加载全局快捷键失败:', e)
+    }
   }, [])
+
+  useEffect(() => {
+    loadHotkeys()
+  }, [loadHotkeys])
+
+  // 保存并即时生效快捷键配置
+  const saveHotkeysList = async (newList: HotkeyItem[], successMsg = '快捷键配置已即时生效') => {
+    setSavingHotkeys(true)
+    try {
+      if (window.api?.hotkeys?.saveAll) {
+        const updated = await window.api.hotkeys.saveAll(newList)
+        if (Array.isArray(updated)) {
+          setHotkeyItems(updated)
+        } else {
+          setHotkeyItems(newList)
+        }
+      } else {
+        setHotkeyItems(newList)
+      }
+      setHotkeyMessage({ text: successMsg, type: 'success' })
+    } catch (err: any) {
+      setHotkeyMessage({ text: `保存失败: ${err.message || err}`, type: 'error' })
+    } finally {
+      setSavingHotkeys(false)
+      setTimeout(() => setHotkeyMessage(null), 3000)
+    }
+  }
+
+  // 开关切换
+  const handleToggleHotkey = async (id: string, enabled: boolean) => {
+    const updated = hotkeyItems.map(item => item.id === id ? { ...item, enabled } : item)
+    setHotkeyItems(updated)
+    await saveHotkeysList(updated, enabled ? '已激活快捷键' : '已禁用该快捷键')
+  }
+
+  // 恢复默认快捷键
+  const handleResetAllHotkeys = async () => {
+    try {
+      if (window.api?.hotkeys?.resetAll) {
+        const res = await window.api.hotkeys.resetAll()
+        setHotkeyItems(res)
+      }
+      setHotkeyMessage({ text: '已恢复默认快捷键配置', type: 'success' })
+      setTimeout(() => setHotkeyMessage(null), 3000)
+    } catch (e: any) {
+      setHotkeyMessage({ text: `重置失败: ${e.message || e}`, type: 'error' })
+    }
+  }
+
+  // 重置单项快捷键
+  const handleResetSingleHotkey = async (id: string) => {
+    const updated = hotkeyItems.map(item => {
+      if (item.id === id) {
+        return { ...item, shortcut: item.defaultShortcut, enabled: true }
+      }
+      return item
+    })
+    setHotkeyItems(updated)
+    await saveHotkeysList(updated, '已恢复该项默认快捷键')
+  }
 
   // 开始录制快捷键
-  const startRecording = useCallback((key: string) => {
-    setEditingKey(key)
-    setRecordingKeys([])
-    setHotkeyError(null)
-  }, [])
+  const startRecordingHotkey = (id: string) => {
+    setEditingHotkeyId(id)
+    setRecordedKeys([])
+    setHotkeyMessage(null)
+  }
 
-  // 处理键盘事件
-  const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
-    if (!editingKey) return
+  // 取消录制
+  const cancelRecordingHotkey = () => {
+    setEditingHotkeyId(null)
+    setRecordedKeys([])
+  }
+
+  // 键盘录制事件处理
+  const handleHotkeyKeyDown = async (e: React.KeyboardEvent) => {
+    if (!editingHotkeyId) return
 
     e.preventDefault()
     e.stopPropagation()
 
-    const modifiers: string[] = []
-    if (e.metaKey) modifiers.push('CommandOrControl')
-    if (e.ctrlKey && !e.metaKey) modifiers.push('Control')
-    if (e.altKey) modifiers.push('Alt')
-    if (e.shiftKey) modifiers.push('Shift')
-
-    // 获取按键名称
-    let key = e.key
-    if (key === 'Control' || key === 'Alt' || key === 'Shift' || key === 'Meta') {
-      setRecordingKeys(modifiers)
+    // 按 Escape 键取消录制
+    if (e.key === 'Escape') {
+      cancelRecordingHotkey()
       return
     }
 
-    // 格式化特殊按键
-    if (key === ' ') key = 'Space'
-    else if (key === 'ArrowUp') key = 'Up'
-    else if (key === 'ArrowDown') key = 'Down'
-    else if (key === 'ArrowLeft') key = 'Left'
-    else if (key === 'ArrowRight') key = 'Right'
-    else if (key.length === 1) key = key.toUpperCase()
+    const modifiers: string[] = []
+    if (e.altKey) modifiers.push('Alt')
+    if (e.metaKey) modifiers.push('CommandOrControl')
+    if (e.shiftKey) modifiers.push('Shift')
+    if (e.ctrlKey && !e.metaKey) modifiers.push('Control')
 
-    const accelerator = [...modifiers, key].join('+')
-    setRecordingKeys([...modifiers, key])
+    // 仅按下修饰键时更新实时显示
+    if (['Control', 'Alt', 'Shift', 'Meta'].includes(e.key)) {
+      setRecordedKeys(modifiers)
+      return
+    }
 
-    // 保存快捷键
-    window.api.hotkeys.set(editingKey, accelerator).then(() => {
-      setHotkeys(prev => ({ ...prev, [editingKey]: accelerator }))
-      setEditingKey(null)
-      setRecordingKeys([])
-    }).catch((err: any) => {
-      setHotkeyError(`保存失败: ${err.message}`)
+    // 至少需要一个修饰键
+    if (modifiers.length === 0) {
+      setHotkeyMessage({ text: '全局快捷键必须包含至少一个修饰键 (Option/Command/Shift/Control)', type: 'error' })
+      return
+    }
+
+    // 使用物理 code 转换为合法按键名称 (例如 KeyE, KeyV, Digit1, Space 等)
+    let mainKey = e.code
+    if (!mainKey) {
+      if (e.key.length === 1) {
+        mainKey = `Key${e.key.toUpperCase()}`
+      } else {
+        mainKey = e.key
+      }
+    }
+
+    const accelerator = [...modifiers, mainKey].join('+')
+    setRecordedKeys([...modifiers, mainKey])
+
+    // 更新到列表并保存
+    const updated = hotkeyItems.map(item => {
+      if (item.id === editingHotkeyId) {
+        return { ...item, shortcut: accelerator, enabled: true }
+      }
+      return item
     })
-  }, [editingKey])
 
-  // 取消录制
-  const cancelRecording = useCallback(() => {
-    setEditingKey(null)
-    setRecordingKeys([])
-    setHotkeyError(null)
-  }, [])
+    setEditingHotkeyId(null)
+    setRecordedKeys([])
+    await saveHotkeysList(updated, '快捷键已成功更新并即时生效')
+  }
 
   const sidebarItems = [
     { id: 'appearance', label: t('settings.appearance.title'), icon: <MonitorPlay className="h-4 w-4" /> },
@@ -489,59 +617,199 @@ export function SettingsPage(): React.ReactElement {
               <div className="space-y-6 animate-in fade-in duration-300">
                 <Card>
                   <CardHeader>
-                    <CardTitle className="flex items-center gap-2">
-                      <Keyboard className="h-5 w-5" />
-                      全局快捷键
-                    </CardTitle>
-                    <CardDescription>自定义全局快捷键，在任何应用中快速访问 EVA 功能</CardDescription>
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <CardTitle className="flex items-center gap-2">
+                          <Keyboard className="h-5 w-5" />
+                          全局快捷键
+                        </CardTitle>
+                        <CardDescription>
+                          在系统任何应用中快速呼出 EVA 功能。所有设置修改后立即动态生效，无需重启应用。
+                        </CardDescription>
+                      </div>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={handleResetAllHotkeys}
+                        disabled={savingHotkeys}
+                        className="text-xs"
+                      >
+                        <RotateCcw className="h-3.5 w-3.5 mr-1.5" />
+                        恢复默认快捷键
+                      </Button>
+                    </div>
                   </CardHeader>
+
                   <CardContent className="space-y-4">
-                    {hotkeyError && (
-                      <div className="flex items-center gap-2 p-3 rounded-md bg-red-100 dark:bg-red-900/20 text-red-700 dark:text-red-400 text-sm">
-                        <AlertCircle className="h-4 w-4" />
-                        {hotkeyError}
+                    {/* 状态操作通知浮条 */}
+                    {hotkeyMessage && (
+                      <div className={`flex items-center justify-between p-3 rounded-lg text-xs font-medium animate-in fade-in duration-150 ${
+                        hotkeyMessage.type === 'success'
+                          ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20'
+                          : 'bg-rose-500/10 text-rose-600 dark:text-rose-400 border border-rose-500/20'
+                      }`}>
+                        <div className="flex items-center gap-2">
+                          {hotkeyMessage.type === 'success' ? (
+                            <CheckCircle2 className="h-4 w-4 shrink-0" />
+                          ) : (
+                            <AlertCircle className="h-4 w-4 shrink-0" />
+                          )}
+                          <span>{hotkeyMessage.text}</span>
+                        </div>
+                        <button
+                          onClick={() => setHotkeyMessage(null)}
+                          className="text-muted-foreground hover:text-foreground text-xs ml-2 cursor-pointer"
+                        >
+                          ✕
+                        </button>
                       </div>
                     )}
 
+                    {/* 快捷键配置列表 */}
                     <div className="space-y-3">
-                      {Object.entries(hotkeys).map(([key, value]) => (
-                        <div key={key} className="flex items-center justify-between py-2 border-b border-border last:border-0">
-                          <div>
-                            <span className="font-medium">{hotkeyLabels[key] || key}</span>
-                          </div>
-                          <div className="flex items-center gap-2">
-                            {editingKey === key ? (
-                              <>
-                                <div
-                                  className="flex items-center gap-1 px-3 py-1.5 rounded-md bg-purple-100 dark:bg-purple-900/30 border-2 border-purple-500 text-sm font-mono min-w-[120px] justify-center"
-                                  tabIndex={0}
-                                  onKeyDown={handleKeyDown}
-                                  autoFocus
-                                >
-                                  {recordingKeys.length > 0 ? recordingKeys.join(' + ') : '按下快捷键...'}
+                      {hotkeyItems.map((item) => {
+                        const isEditing = editingHotkeyId === item.id
+                        const isCustom = item.shortcut !== item.defaultShortcut
+
+                        return (
+                          <div
+                            key={item.id}
+                            className={`p-4 rounded-xl border transition-all duration-200 ${
+                              isEditing
+                                ? 'border-purple-500/60 bg-purple-500/5 shadow-xs ring-1 ring-purple-500/30'
+                                : item.enabled
+                                  ? 'border-border/60 bg-card/60 hover:border-border hover:bg-muted/30'
+                                  : 'border-border/30 bg-muted/20 opacity-70'
+                            }`}
+                          >
+                            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                              {/* 左侧：图标与说明 */}
+                              <div className="flex items-start gap-3.5 min-w-0 flex-1">
+                                <div className={`p-2.5 rounded-xl shrink-0 mt-0.5 ${
+                                  item.id === 'toggle_main'
+                                    ? 'bg-blue-500/10 text-blue-500'
+                                    : item.id === 'hub_clipboard'
+                                      ? 'bg-amber-500/10 text-amber-500'
+                                      : 'bg-violet-500/10 text-violet-500'
+                                }`}>
+                                  {item.id === 'toggle_main' ? (
+                                    <LayoutDashboard className="h-5 w-5" />
+                                  ) : item.id === 'hub_clipboard' ? (
+                                    <Clipboard className="h-5 w-5" />
+                                  ) : (
+                                    <Terminal className="h-5 w-5" />
+                                  )}
                                 </div>
-                                <Button variant="ghost" size="sm" onClick={cancelRecording}>
-                                  取消
-                                </Button>
-                              </>
-                            ) : (
-                              <>
-                                <kbd className="px-2 py-1 rounded bg-muted text-sm font-mono">
-                                  {value.replace('CommandOrControl', '⌘').replace('Alt', '⌥').replace('Shift', '⇧').replace('Control', '⌃').replace(/\+/g, ' ')}
-                                </kbd>
-                                <Button variant="ghost" size="sm" onClick={() => startRecording(key)}>
-                                  <RefreshCw className="h-4 w-4" />
-                                </Button>
-                              </>
-                            )}
+
+                                <div className="min-w-0 flex-1">
+                                  <div className="flex items-center gap-2 flex-wrap">
+                                    <span className="font-semibold text-sm text-foreground">
+                                      {item.name}
+                                    </span>
+                                    {isCustom && (
+                                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-muted text-muted-foreground font-mono">
+                                        默认: {formatShortcutDisplay(item.defaultShortcut).join(' ')}
+                                      </span>
+                                    )}
+                                    {!item.enabled && (
+                                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-muted text-muted-foreground">
+                                        已停用
+                                      </span>
+                                    )}
+                                  </div>
+                                  <p className="text-xs text-muted-foreground mt-1">
+                                    {item.description}
+                                  </p>
+                                </div>
+                              </div>
+
+                              {/* 右侧：按键录制、恢复默认与开关 */}
+                              <div className="flex items-center gap-3 shrink-0 self-end sm:self-center">
+                                {isEditing ? (
+                                  <div className="flex items-center gap-2">
+                                    <div
+                                      tabIndex={0}
+                                      onKeyDown={handleHotkeyKeyDown}
+                                      autoFocus
+                                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-purple-500/10 border-2 border-purple-500 text-xs font-mono min-w-[170px] justify-center text-purple-600 dark:text-purple-300 font-semibold shadow-inner focus:outline-none animate-pulse"
+                                    >
+                                      {recordedKeys.length > 0
+                                        ? formatShortcutDisplay(recordedKeys.join('+')).join(' + ')
+                                        : '按下新的按键组合...'}
+                                    </div>
+                                    <Button
+                                      variant="ghost"
+                                      size="sm"
+                                      onClick={cancelRecordingHotkey}
+                                      className="text-xs h-8"
+                                    >
+                                      取消
+                                    </Button>
+                                  </div>
+                                ) : (
+                                  <div className="flex items-center gap-2.5">
+                                    {/* 键帽立体展示 */}
+                                    <div className={`flex items-center gap-1.5 ${item.enabled ? '' : 'opacity-40 grayscale'}`}>
+                                      {formatShortcutDisplay(item.shortcut).map((key, i) => (
+                                        <kbd
+                                          key={i}
+                                          className="px-2.5 py-1 text-xs font-mono font-semibold rounded-md border border-border/80 bg-muted/80 shadow-xs text-foreground min-w-[28px] text-center"
+                                        >
+                                          {key}
+                                        </kbd>
+                                      ))}
+                                    </div>
+
+                                    {/* 修改按钮 */}
+                                    <Button
+                                      variant="outline"
+                                      size="sm"
+                                      onClick={() => startRecordingHotkey(item.id)}
+                                      disabled={!item.enabled || savingHotkeys}
+                                      className="text-xs h-8 px-2.5"
+                                      title="更改此快捷键"
+                                    >
+                                      更改
+                                    </Button>
+
+                                    {/* 恢复该项默认按钮 */}
+                                    {isCustom && (
+                                      <Button
+                                        variant="ghost"
+                                        size="sm"
+                                        onClick={() => handleResetSingleHotkey(item.id)}
+                                        disabled={savingHotkeys}
+                                        className="text-xs h-8 w-8 p-0 text-muted-foreground hover:text-foreground"
+                                        title="复原此项为默认快捷键"
+                                      >
+                                        <RotateCcw className="h-3.5 w-3.5" />
+                                      </Button>
+                                    )}
+
+                                    <div className="h-4 w-px bg-border/80 mx-0.5" />
+
+                                    {/* 启用/禁用 开关 */}
+                                    <div className="flex items-center gap-1.5" title={item.enabled ? '点击禁用该快捷键' : '点击激活该快捷键'}>
+                                      <Switch
+                                        checked={item.enabled}
+                                        onCheckedChange={(checked) => handleToggleHotkey(item.id, checked)}
+                                        disabled={savingHotkeys}
+                                      />
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            </div>
                           </div>
-                        </div>
-                      ))}
+                        )
+                      })}
                     </div>
 
-                    <p className="text-xs text-muted-foreground">
-                      点击刷新按钮后，按下新的快捷键组合即可更改。快捷键在应用重启后生效。
-                    </p>
+                    <div className="mt-4 pt-3 border-t border-border/40 flex items-center justify-between text-xs text-muted-foreground">
+                      <p>
+                        💡 提示：按住 <kbd className="px-1.5 py-0.5 rounded bg-muted font-mono">⌥ Option</kbd>、<kbd className="px-1.5 py-0.5 rounded bg-muted font-mono">⌘ Command</kbd> 或 <kbd className="px-1.5 py-0.5 rounded bg-muted font-mono">⇧ Shift</kbd> 再按目标字母即可完成录制。若产生快捷键冲突，可随时关闭对应开关停用。
+                      </p>
+                    </div>
                   </CardContent>
                 </Card>
               </div>

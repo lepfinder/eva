@@ -260,6 +260,13 @@ const servicesApi: Record<string, AnyFn> = {
   tailLog: (id: string, lines?: number) => invoke('service_tail_log', { id, lines: lines ?? null }),
 }
 
+// Global Hotkeys
+const hotkeysApi: Record<string, AnyFn> = {
+  getAll: () => invoke('hotkeys_get_all'),
+  saveAll: (items: any[]) => invoke('hotkeys_save_all', { items }),
+  resetAll: () => invoke('hotkeys_reset_all'),
+}
+
 export function initDesktopBridge(): void {
   if ((window as any).api) return
   // Merge: implemented methods call real Tauri commands; rest fall through to stub defaults.
@@ -279,6 +286,7 @@ export function initDesktopBridge(): void {
       if (key === 'httpServer') return httpServerApi
       if (key === 'ai') return aiApi
       if (key === 'services') return servicesApi
+      if (key === 'hotkeys') return hotkeysApi
       return stub[key]
     },
   })

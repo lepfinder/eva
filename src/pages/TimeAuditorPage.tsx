@@ -5,7 +5,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { getActiveAiConfig } from '@/components/AiProviderSettings'
-import { RefreshCw, Clock, Monitor, TrendingUp, Sparkles, FolderOpen, FileText, CalendarDays, SearchX, Play, List, EyeOff, ChevronRight, Calendar, ChevronLeft, Code2, Terminal, BookOpen, MessageSquare, PenLine, Palette, Gamepad2, Zap, Globe, Minus, Pause, Moon, Pin, HelpCircle, Receipt, Coffee, Tag, type LucideIcon } from 'lucide-react'
+import { RefreshCw, Clock, Monitor, TrendingUp, Sparkles, FolderOpen, FileText, CalendarDays, SearchX, Play, List, EyeOff, ChevronRight, Calendar, ChevronLeft, Code2, Terminal, BookOpen, MessageSquare, PenLine, Palette, Gamepad2, Zap, Globe, Minus, Pause, Moon, Pin, HelpCircle, Receipt, Coffee, Tag, X, Check, type LucideIcon } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, Legend } from 'recharts'
@@ -317,6 +317,170 @@ function VirtualizedActivityTable({ logs, remarkEdits, setRemarkEdits, setLogs, 
     )
 }
 
+interface AwayLabelPopoverProps {
+    block: {
+        startTime: number
+        endTime: number
+        duration: number
+        category: string
+    }
+    x: number
+    y: number
+    initialValue?: string
+    existingLabel?: string
+    onSelect: (label: string) => void
+    onClear?: () => void
+    onClose: () => void
+}
+
+function AwayLabelPopover({
+    block,
+    x,
+    y,
+    initialValue = '',
+    existingLabel,
+    onSelect,
+    onClear,
+    onClose,
+}: AwayLabelPopoverProps) {
+    const QUICK_TAGS = ['午餐', '晚餐', '去卫生间', '咖啡休息', '线下沟通', '开会', '外出', '运动', '小憩', '其他']
+    const [selectedTag, setSelectedTag] = useState(existingLabel || '')
+    const [inputValue, setInputValue] = useState(initialValue || existingLabel || '')
+    const [isSubmitting, setIsSubmitting] = useState(false)
+
+    const panelWidth = 276
+    const panelHeight = 260
+    const windowWidth = typeof window !== 'undefined' ? window.innerWidth : 1200
+    const windowHeight = typeof window !== 'undefined' ? window.innerHeight : 800
+    const px = Math.min(x + 12, windowWidth - panelWidth - 12)
+    const py = y + 12 + panelHeight > windowHeight
+        ? Math.max(12, y - panelHeight - 12)
+        : y + 12
+
+    const handleSelectTag = (tag: string) => {
+        if (isSubmitting) return
+        setSelectedTag(tag)
+        setInputValue(tag)
+        setIsSubmitting(true)
+        // 给出 200ms 的轻快微弹性反馈，让用户清晰看到高亮状态和 Check 图标，然后平滑保存退出
+        setTimeout(() => {
+            onSelect(tag)
+        }, 200)
+    }
+
+    const handleConfirm = () => {
+        const val = inputValue.trim()
+        if (val) {
+            onSelect(val)
+        }
+    }
+
+    return (
+        <>
+            {/* 点击空白处关闭标记面板 */}
+            <div
+                className="fixed inset-0 z-[199]"
+                onClick={onClose}
+            />
+
+            {/* 标记面板浮层 */}
+            <div
+                className="fixed z-[200] bg-white dark:bg-zinc-900 border border-zinc-200/90 dark:border-zinc-800 rounded-xl shadow-2xl p-4 animate-in fade-in zoom-in-95 duration-150"
+                style={{ left: px, top: py, width: panelWidth }}
+                onClick={(e) => e.stopPropagation()}
+            >
+                {/* 标题栏 */}
+                <div className="flex items-center justify-between mb-2.5">
+                    <div className="flex items-center gap-1.5 text-sm font-semibold text-zinc-800 dark:text-zinc-100">
+                        <Coffee className="h-4 w-4 text-indigo-500" />
+                        标记离席原因
+                    </div>
+                    <button
+                        type="button"
+                        onMouseDown={(e) => e.preventDefault()}
+                        onClick={onClose}
+                        className="text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200 transition-colors p-1 rounded-md hover:bg-zinc-100 dark:hover:bg-zinc-800"
+                    >
+                        <X className="h-4 w-4" />
+                    </button>
+                </div>
+
+                {/* 时间区间信息 */}
+                <p className="text-[11px] text-zinc-400 mb-3 font-mono">
+                    {formatTime(block.startTime)} – {formatTime(block.endTime)}
+                    {' · '}{formatDuration(block.duration)}
+                </p>
+
+                {/* 快捷标签 */}
+                <div className="flex flex-wrap gap-1.5 mb-3.5">
+                    {QUICK_TAGS.map(tag => {
+                        const isSelected = selectedTag === tag
+                        return (
+                            <button
+                                key={tag}
+                                type="button"
+                                onMouseDown={(e) => e.preventDefault()}
+                                onClick={() => handleSelectTag(tag)}
+                                className={`group px-2.5 py-1 rounded-full text-[11px] font-medium border flex items-center gap-1 transition-all duration-150 select-none cursor-pointer active:scale-95 ${
+                                    isSelected
+                                        ? 'bg-indigo-600 border-indigo-600 text-white shadow-sm scale-105 ring-2 ring-indigo-300/50 dark:ring-indigo-700/50'
+                                        : 'bg-zinc-100/90 dark:bg-zinc-800/80 border-zinc-200/80 dark:border-zinc-700/80 text-zinc-600 dark:text-zinc-300 hover:bg-indigo-50 dark:hover:bg-indigo-950/40 hover:text-indigo-600 dark:hover:text-indigo-300 hover:border-indigo-200 dark:hover:border-indigo-800'
+                                }`}
+                            >
+                                {isSelected && (
+                                    <Check className="h-3 w-3 animate-in zoom-in-50 duration-150 stroke-[2.5]" />
+                                )}
+                                {tag}
+                            </button>
+                        )
+                    })}
+                </div>
+
+                {/* 自由输入与确认 */}
+                <div className="flex gap-1.5">
+                    <Input
+                        placeholder="自定义原因…"
+                        value={inputValue}
+                        onChange={(e) => {
+                            setInputValue(e.target.value)
+                            if (selectedTag && e.target.value !== selectedTag) {
+                                setSelectedTag('')
+                            }
+                        }}
+                        onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                                e.preventDefault()
+                                handleConfirm()
+                            }
+                        }}
+                        className="h-8 text-xs flex-1 focus-visible:ring-indigo-500"
+                    />
+                    <button
+                        type="button"
+                        onMouseDown={(e) => e.preventDefault()}
+                        onClick={handleConfirm}
+                        className="px-3 h-8 rounded-md bg-indigo-600 hover:bg-indigo-500 active:scale-95 text-white text-xs font-medium transition-all shadow-xs shrink-0 cursor-pointer"
+                    >
+                        确认
+                    </button>
+                </div>
+
+                {/* 清除已有标记 */}
+                {existingLabel && onClear && (
+                    <button
+                        type="button"
+                        onMouseDown={(e) => e.preventDefault()}
+                        onClick={onClear}
+                        className="mt-2.5 w-full text-[11px] text-zinc-400 hover:text-red-500 dark:hover:text-red-400 py-1 transition-colors flex items-center justify-center gap-1 cursor-pointer"
+                    >
+                        <X className="h-3 w-3" /> 清除此段标记
+                    </button>
+                )}
+            </div>
+        </>
+    )
+}
+
 export function TimeAuditorPage() {
     const [stats, setStats] = useState<AppStat[]>([])
     const [logs, setLogs] = useState<ActivityLog[]>([])
@@ -333,6 +497,24 @@ export function TimeAuditorPage() {
     const [hoverThumbnail, setHoverThumbnail] = useState<string | null>(null)
     const [loadingThumbnail, setLoadingThumbnail] = useState(false)
     const [viewRange, setViewRange] = useState<[number, number]>([0, 100])
+
+    // 工间离席标记：key 为 startTime，value 为用户标注的原因
+    const [awayLabelMap, setAwayLabelMap] = useState<Record<number, string>>({})
+    // 当前打开的标记面板
+    const [awayLabelPanel, setAwayLabelPanel] = useState<{
+        block: {
+            startTime: number
+            endTime: number
+            duration: number
+            category: string
+            appName: string
+            windowTitle: string
+            isGap: boolean
+        } | null
+        x: number
+        y: number
+        inputValue: string
+    } | null>(null)
 
     // Time Capsule 状态
     const [showTimeCapsule, setShowTimeCapsule] = useState(false)
@@ -579,7 +761,20 @@ ${lines}`
                 }
             }
 
-            // 3. 正常工间离席（10分钟 ~ 3.5小时的白天/晚间空白）
+            // 3. 下班后离线判定：20:00 后开始超过 1 小时，或 19:00 后开始超过 2 小时
+            // 这类场景是下班回家/睡觉，不应归为"工间离席"
+            const isAfterWork =
+                (startHour >= 20 && durationSec >= 3600) ||
+                (startHour >= 19 && durationSec >= 2 * 3600)
+            if (isAfterWork) {
+                return {
+                    category: 'offline' as const,
+                    appName: '设备离线',
+                    windowTitle: '下班离线 / 休息'
+                }
+            }
+
+            // 4. 正常工间离席（10分钟 ~ 阈值以内的白天/晚间空白）
             let title = '息屏 / 离开工位'
             if (startHour >= 11 && startHour <= 13) {
                 title = '午间用餐 / 休息'
@@ -930,30 +1125,50 @@ ${lines}`
                                 const color = getAppColor(block.appName, block.category)
                                 const isAway = block.category === 'away'
                                 const isOffline = block.category === 'offline'
+                                const awayLabel = isAway ? awayLabelMap[block.startTime] : undefined
 
                                 return (
                                     <div
                                         key={block.startTime + '-' + index}
-                                        className={`absolute top-2 bottom-2 rounded-[2px] transition-all cursor-crosshair ${
+                                        className={`absolute top-2 bottom-2 rounded-[2px] transition-all ${
                                             isAway
-                                                ? 'z-10 hover:z-50 hover:scale-y-105'
+                                                ? 'z-10 hover:z-50 hover:scale-y-105 cursor-pointer'
                                                 : isOffline
-                                                ? 'z-0 opacity-40 hover:opacity-80 hover:z-50'
-                                                : 'mix-blend-multiply dark:mix-blend-screen hover:z-50 hover:scale-y-110'
+                                                ? 'z-0 opacity-40 hover:opacity-80 hover:z-50 cursor-crosshair'
+                                                : 'mix-blend-multiply dark:mix-blend-screen hover:z-50 hover:scale-y-110 cursor-crosshair'
                                         }`}
                                         style={{
                                             left: `${left}%`,
                                             width: `${width}%`,
                                             backgroundColor: isAway
-                                                ? 'rgba(245, 158, 11, 0.22)'
+                                                ? awayLabel
+                                                    ? 'rgba(99, 102, 241, 0.15)'   // 已标注：靛紫柔和底
+                                                    : 'rgba(245, 158, 11, 0.22)'   // 未标注：橙色底
                                                 : isOffline
                                                 ? 'rgba(148, 163, 184, 0.15)'
                                                 : color,
                                             backgroundImage: isAway
-                                                ? 'repeating-linear-gradient(45deg, rgba(245, 158, 11, 0.35), rgba(245, 158, 11, 0.35) 2px, transparent 2px, transparent 6px)'
+                                                ? awayLabel
+                                                    ? 'repeating-linear-gradient(45deg, rgba(99, 102, 241, 0.2), rgba(99, 102, 241, 0.2) 1.5px, transparent 1.5px, transparent 8px)'  // 已标注：细腻淡紫斜纹
+                                                    : 'repeating-linear-gradient(45deg, rgba(245, 158, 11, 0.35), rgba(245, 158, 11, 0.35) 2px, transparent 2px, transparent 6px)'  // 未标注：橙色斜线
                                                 : undefined,
-                                            border: isAway ? '1px dashed rgba(245, 158, 11, 0.6)' : undefined,
+                                            border: isAway
+                                                ? awayLabel
+                                                    ? '1px solid rgba(99, 102, 241, 0.6)'    // 已标注：细实线紫边框
+                                                    : '1px dashed rgba(245, 158, 11, 0.6)'    // 未标注：橙色虚线边框
+                                                : undefined,
                                             opacity: isOffline ? 0.35 : 0.95,
+                                        }}
+                                        onClick={(e) => {
+                                            if (!isAway) return
+                                            e.stopPropagation()
+                                            setHoveredBlock(null)
+                                            setAwayLabelPanel({
+                                                block,
+                                                x: e.clientX,
+                                                y: e.clientY,
+                                                inputValue: awayLabelMap[block.startTime] ?? ''
+                                            })
                                         }}
                                         onMouseEnter={(e) => {
                                             setHoveredBlock({ ...block, config, color })
@@ -988,7 +1203,18 @@ ${lines}`
                                             setHoveredBlock(null)
                                             setHoverThumbnail(null)
                                         }}
-                                    />
+                                    >
+                                        {/* 已标记标签显示在块内 */}
+                                        {isAway && awayLabel && width > 3 && (
+                                            <div
+                                                className="absolute inset-0 flex items-center justify-center pointer-events-none"
+                                            >
+                                                <span className="text-[9px] font-semibold text-indigo-700 dark:text-indigo-200 bg-indigo-100/90 dark:bg-indigo-950/80 border border-indigo-200/80 dark:border-indigo-800/80 px-1 py-0.5 rounded shadow-xs truncate max-w-full mx-0.5 leading-tight">
+                                                    {awayLabel}
+                                                </span>
+                                            </div>
+                                        )}
+                                    </div>
                                 )
                             })}
                         </div>
@@ -1044,11 +1270,21 @@ ${lines}`
 
                                     {/* 空白离席 / 离线特别卡片 */}
                                     {isAwayBlock ? (
-                                        <div className="mb-4 bg-amber-500/10 border border-amber-500/20 rounded-lg p-2.5 flex items-center gap-2 text-amber-800 dark:text-amber-200">
-                                            <Coffee className="h-4 w-4 text-amber-500 shrink-0" />
-                                            <div className="text-[11px] leading-tight">
+                                        <div className="mb-4 bg-amber-500/10 border border-amber-500/20 rounded-lg p-2.5 flex items-start gap-2 text-amber-800 dark:text-amber-200">
+                                            <Coffee className="h-4 w-4 text-amber-500 shrink-0 mt-0.5" />
+                                            <div className="text-[11px] leading-tight flex-1 min-w-0">
                                                 <p className="font-semibold">工间离开工位</p>
-                                                <p className="text-[10px] text-zinc-500 dark:text-zinc-400 mt-0.5">息屏锁屏 / 用餐或小憩</p>
+                                                {awayLabelMap[hoveredBlock.startTime] ? (
+                                                    <div className="mt-1.5 flex items-center gap-1.5">
+                                                        <span className="inline-flex items-center gap-1 text-[10px] font-medium text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-950/70 border border-indigo-200/80 dark:border-indigo-800/60 px-1.5 py-0.5 rounded">
+                                                            <Tag className="h-2.5 w-2.5" />
+                                                            {awayLabelMap[hoveredBlock.startTime]}
+                                                        </span>
+                                                        <span className="text-[9px] text-zinc-400">点击可修改</span>
+                                                    </div>
+                                                ) : (
+                                                    <p className="text-[10px] text-zinc-500 dark:text-zinc-400 mt-0.5">息屏锁屏 / 用餐或小憩 · 点击可标记原因</p>
+                                                )}
                                             </div>
                                         </div>
                                     ) : isOfflineBlock ? (
@@ -1097,6 +1333,30 @@ ${lines}`
                         })()}
                     </CardContent>
                 </Card>
+
+                {/* 工间离席标记面板 */}
+                {awayLabelPanel && awayLabelPanel.block && (
+                    <AwayLabelPopover
+                        block={awayLabelPanel.block}
+                        x={awayLabelPanel.x}
+                        y={awayLabelPanel.y}
+                        initialValue={awayLabelPanel.inputValue}
+                        existingLabel={awayLabelMap[awayLabelPanel.block.startTime]}
+                        onSelect={(label) => {
+                            setAwayLabelMap(prev => ({ ...prev, [awayLabelPanel.block.startTime]: label }))
+                            setAwayLabelPanel(null)
+                        }}
+                        onClear={() => {
+                            setAwayLabelMap(prev => {
+                                const next = { ...prev }
+                                delete next[awayLabelPanel.block.startTime]
+                                return next
+                            })
+                            setAwayLabelPanel(null)
+                        }}
+                        onClose={() => setAwayLabelPanel(null)}
+                    />
+                )}
 
                 {loading && stats.length === 0 ? (
                     <div className="flex items-center justify-center h-60 text-zinc-500">
@@ -1398,6 +1658,7 @@ ${lines}`
                 appStats={stats}
                 logs={logs}
                 summary={summary}
+                awayStats={awayStats}
             />
 
 
