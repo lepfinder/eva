@@ -3,7 +3,7 @@
  */
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { flushSync } from 'react-dom'
-import { invoke } from '@tauri-apps/api/core'
+import { invoke, convertFileSrc } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import {
     Copy, Check, Trash2, Search, Clock, Image, Code, Type,
@@ -34,6 +34,12 @@ import {
 
 const imageDataUrlCache = new Map<string, string>()
 
+/** 本地日历日 YYYY-MM-DD（勿用 toISOString，那是 UTC） */
+function localDateString(date = new Date()) {
+    const pad = (n: number) => n.toString().padStart(2, '0')
+    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
+}
+
 // 类型定义
 type ClipboardItemType = 'text' | 'image' | 'html' | 'color' | 'code'
 
@@ -45,6 +51,7 @@ interface ClipboardItem {
     sourceApp: string
     timestamp: number
     imagePath?: string
+    thumbPath?: string
     language?: string
     colorValue?: string
 }
@@ -91,16 +98,15 @@ function formatTime(timestamp: number): string {
 // 格式化日期标题与副标题
 function formatDateLabel(dateStr: string) {
     const today = new Date()
-    const pad = (n: number) => n.toString().padStart(2, '0')
-    const localToday = `${today.getFullYear()}-${pad(today.getMonth() + 1)}-${pad(today.getDate())}`
+    const localToday = localDateString(today)
 
     const yest = new Date()
     yest.setDate(yest.getDate() - 1)
-    const localYest = `${yest.getFullYear()}-${pad(yest.getMonth() + 1)}-${pad(yest.getDate())}`
+    const localYest = localDateString(yest)
 
     const beforeYest = new Date()
     beforeYest.setDate(beforeYest.getDate() - 2)
-    const localBeforeYest = `${beforeYest.getFullYear()}-${pad(beforeYest.getMonth() + 1)}-${pad(beforeYest.getDate())}`
+    const localBeforeYest = localDateString(beforeYest)
 
     const parts = dateStr.split('-')
     const year = parseInt(parts[0], 10)
@@ -123,48 +129,40 @@ function formatDateLabel(dateStr: string) {
     }
 }
 
-// 通过 Rust 命令读取本地图片并转 base64 显示，绕开 WebView file:// 限制
-function ClipboardImage({ imagePath }: { imagePath: string }) {
-    const [src, setSrc] = useState<string>('')
-    const placeholderRef = useRef<HTMLDivElement | null>(null)
+// 列表优先走 asset protocol（缩略图），失败时再回退 base64
+function ClipboardImage({ imagePath, thumbPath }: { imagePath: string; thumbPath?: string }) {
+    const assetSrc = convertFileSrc(thumbPath || imagePath)
+    const [src, setSrc] = useState(assetSrc)
+    const [failedAsset, setFailedAsset] = useState(false)
 
     useEffect(() => {
+        setSrc(convertFileSrc(thumbPath || imagePath))
+        setFailedAsset(false)
+    }, [imagePath, thumbPath])
+
+    useEffect(() => {
+        if (!failedAsset) return
         if (imageDataUrlCache.has(imagePath)) {
             setSrc(imageDataUrlCache.get(imagePath) || '')
             return
         }
-
-        const element = placeholderRef.current
-        if (!element) return
-
         let cancelled = false
-        const observer = new IntersectionObserver(
-            (entries) => {
-                if (!entries[0].isIntersecting) return
-                observer.disconnect()
-                invoke<string>('clipboard_get_image_data', { imagePath })
-                    .then((dataUrl) => {
-                        if (cancelled) return
-                        imageDataUrlCache.set(imagePath, dataUrl)
-                        setSrc(dataUrl)
-                    })
-                    .catch(() => {
-                        if (!cancelled) setSrc('')
-                    })
-            },
-            { rootMargin: '200px' }
-        )
-
-        observer.observe(element)
-
+        invoke<string>('clipboard_get_image_data', { imagePath })
+            .then((dataUrl) => {
+                if (cancelled) return
+                imageDataUrlCache.set(imagePath, dataUrl)
+                setSrc(dataUrl)
+            })
+            .catch(() => {
+                if (!cancelled) setSrc('')
+            })
         return () => {
             cancelled = true
-            observer.disconnect()
         }
-    }, [imagePath])
+    }, [failedAsset, imagePath])
 
     if (!src) {
-        return <div ref={placeholderRef} className="w-full h-24 rounded-lg bg-zinc-100 dark:bg-zinc-800 animate-pulse" />
+        return <div className="w-full h-24 rounded-lg bg-zinc-100 dark:bg-zinc-800 animate-pulse" />
     }
 
     return (
@@ -173,6 +171,9 @@ function ClipboardImage({ imagePath }: { imagePath: string }) {
             alt="Clipboard image"
             className="w-full h-auto max-h-48 object-contain rounded-lg bg-zinc-100 dark:bg-zinc-800"
             loading="lazy"
+            onError={() => {
+                if (!failedAsset) setFailedAsset(true)
+            }}
         />
     )
 }
@@ -267,7 +268,7 @@ function ClipboardCard({
             <div className="mb-3">
                 {item.type === 'image' && item.imagePath && (
                     <div className="relative">
-                        <ClipboardImage imagePath={item.imagePath} />
+                        <ClipboardImage imagePath={item.imagePath} thumbPath={item.thumbPath} />
                     </div>
                 )}
 
@@ -391,8 +392,8 @@ export function ClipboardHistoryPage() {
 
         listen<ClipboardItem>('clipboard:newItem', (event) => {
             if (cancelled) return
-            // 如果未限定日期或当前选中的是今天，则 prepend
-            const todayStr = new Date().toISOString().split('T')[0]
+            // 如果未限定日期或当前选中的是今天，则 prepend（必须用本地日期，与侧栏/SQL localtime 一致）
+            const todayStr = localDateString()
             if (!selectedDate || selectedDate === todayStr) {
                 setItems(prev => [event.payload, ...prev])
             }
@@ -453,7 +454,10 @@ export function ClipboardHistoryPage() {
         })
 
         try {
-            await window.api.clipboard.writeToClipboard(id)
+            const ok = await window.api.clipboard.writeToClipboard(id)
+            if (!ok) {
+                throw new Error('clipboard write returned false')
+            }
             setCopyingId(null)
             setCopiedId(id)
             setTimeout(() => setCopiedId(prev => prev === id ? null : prev), 1500)

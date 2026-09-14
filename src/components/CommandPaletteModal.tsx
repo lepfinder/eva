@@ -289,13 +289,21 @@ export function CommandPaletteModal(): React.ReactElement | null {
                 icon: <Clipboard className="h-4 w-4 text-blue-400" />,
                 actionLabel: '写回剪贴板',
                 action: async () => {
-                    if (window.api?.clipboard?.writeToClipboard) {
-                        await window.api.clipboard.writeToClipboard(c.id)
-                    } else {
-                        await navigator.clipboard.writeText(c.content)
+                    try {
+                        if (!window.api?.clipboard?.writeToClipboard) {
+                            showToast('写回剪贴板失败：API 不可用')
+                            return
+                        }
+                        const ok = await window.api.clipboard.writeToClipboard(c.id)
+                        if (!ok) {
+                            showToast('写回剪贴板失败')
+                            return
+                        }
+                        showToast('已写回系统剪贴板')
+                        setOpen(false)
+                    } catch {
+                        showToast('写回剪贴板失败')
                     }
-                    showToast('已写回系统剪贴板')
-                    setOpen(false)
                 }
             })
         })

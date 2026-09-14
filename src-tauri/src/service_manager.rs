@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File, OpenOptions};
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Mutex, OnceLock};
@@ -209,7 +209,7 @@ fn run_stop_async(app: AppHandle, def: ServiceDefinition) {
     let id = def.id.clone();
     let name = def.name.clone();
     thread::spawn(move || {
-        let result = stop_service_impl(&def, false);
+        let result = stop_service_impl(&def, false, PortSweep::AllListeners);
         clear_pending(&id);
         emit_action_complete(&app, &id, result.success, result.message);
         let _ = name;
@@ -219,7 +219,7 @@ fn run_stop_async(app: AppHandle, def: ServiceDefinition) {
 fn run_restart_async(app: AppHandle, def: ServiceDefinition) {
     let id = def.id.clone();
     thread::spawn(move || {
-        stop_service_impl(&def, false);
+        stop_service_impl(&def, false, PortSweep::AllListeners);
         thread::sleep(Duration::from_secs(1));
         let (success, message) = match spawn_service(&def) {
             Ok(pid) => match wait_until_ready(&def, pid) {
@@ -255,9 +255,42 @@ fn expand_template(value: &str, project_dir: &Path) -> String {
         .replace('~', &home)
 }
 
-/// 构建包含常见开发工具路径（Homebrew、NVM、FNM、Bun、Cargo 等）的增强 PATH
+fn push_path_dir(result_parts: &mut Vec<String>, seen: &mut HashSet<String>, d: PathBuf) {
+    let s = d.to_string_lossy().to_string();
+    if d.exists() && seen.insert(s.clone()) {
+        result_parts.push(s);
+    }
+}
+
+/// 构建包含常见开发工具路径（Homebrew、NVM、FNM、Bun、Cargo 等）的增强 PATH。
+/// 优先级：`~/.local/bin` 等用户 shim → 进程原 PATH → Homebrew/系统 → NVM/FNM 各版本回退。
+/// 不要把「最新 NVM/FNM」插到最前，否则会覆盖用户默认 Node，打挂 native addon。
 pub fn get_augmented_path() -> String {
-    let mut dirs_to_add: Vec<PathBuf> = vec![
+    let mut result_parts: Vec<String> = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+
+    if let Some(home) = dirs::home_dir() {
+        for d in [
+            home.join(".local/bin"),
+            home.join(".cargo/bin"),
+            home.join(".bun/bin"),
+            home.join("miniconda3/bin"),
+            home.join("miniconda3/condabin"),
+            home.join(".local/share/fnm/aliases/default/bin"),
+            home.join(".nvm/current/bin"),
+        ] {
+            push_path_dir(&mut result_parts, &mut seen, d);
+        }
+    }
+
+    let existing_path = std::env::var("PATH").unwrap_or_default();
+    for p in existing_path.split(':') {
+        if !p.is_empty() && seen.insert(p.to_string()) {
+            result_parts.push(p.to_string());
+        }
+    }
+
+    for d in [
         PathBuf::from("/opt/homebrew/bin"),
         PathBuf::from("/opt/homebrew/sbin"),
         PathBuf::from("/usr/local/bin"),
@@ -266,62 +299,38 @@ pub fn get_augmented_path() -> String {
         PathBuf::from("/bin"),
         PathBuf::from("/usr/sbin"),
         PathBuf::from("/sbin"),
-    ];
+    ] {
+        push_path_dir(&mut result_parts, &mut seen, d);
+    }
 
     if let Some(home) = dirs::home_dir() {
-        dirs_to_add.insert(0, home.join(".local/bin"));
-        dirs_to_add.insert(0, home.join(".cargo/bin"));
-        dirs_to_add.insert(0, home.join(".bun/bin"));
-        dirs_to_add.insert(0, home.join("miniconda3/bin"));
-        dirs_to_add.insert(0, home.join("miniconda3/condabin"));
-
-        // NVM node versions
+        let mut version_bins: Vec<PathBuf> = Vec::new();
         let nvm_versions = home.join(".nvm/versions/node");
         if nvm_versions.is_dir() {
             if let Ok(entries) = fs::read_dir(&nvm_versions) {
-                let mut node_dirs: Vec<PathBuf> = entries
-                    .filter_map(|e| e.ok())
-                    .map(|e| e.path().join("bin"))
-                    .filter(|p| p.is_dir())
-                    .collect();
-                node_dirs.sort();
-                node_dirs.reverse(); // latest version first
-                for p in node_dirs {
-                    dirs_to_add.insert(0, p);
-                }
+                version_bins.extend(
+                    entries
+                        .filter_map(|e| e.ok())
+                        .map(|e| e.path().join("bin"))
+                        .filter(|p| p.is_dir()),
+                );
             }
         }
-
-        // FNM current multishells
-        let fnm_dir = home.join(".local/state/fnm_multishells");
-        if fnm_dir.is_dir() {
-            if let Ok(entries) = fs::read_dir(&fnm_dir) {
-                for entry in entries.flatten() {
-                    let bin_path = entry.path().join("bin");
-                    if bin_path.is_dir() {
-                        dirs_to_add.insert(0, bin_path);
-                    }
-                }
+        let fnm_versions = home.join(".local/share/fnm/node-versions");
+        if fnm_versions.is_dir() {
+            if let Ok(entries) = fs::read_dir(&fnm_versions) {
+                version_bins.extend(
+                    entries
+                        .filter_map(|e| e.ok())
+                        .map(|e| e.path().join("installation/bin"))
+                        .filter(|p| p.is_dir()),
+                );
             }
         }
-    }
-
-    let existing_path = std::env::var("PATH").unwrap_or_default();
-    let existing_parts: Vec<&str> = existing_path.split(':').collect();
-
-    let mut result_parts: Vec<String> = Vec::new();
-    let mut seen: HashSet<String> = HashSet::new();
-
-    for d in dirs_to_add {
-        let s = d.to_string_lossy().to_string();
-        if d.exists() && seen.insert(s.clone()) {
-            result_parts.push(s);
-        }
-    }
-
-    for p in existing_parts {
-        if !p.is_empty() && seen.insert(p.to_string()) {
-            result_parts.push(p.to_string());
+        version_bins.sort();
+        version_bins.reverse();
+        for d in version_bins {
+            push_path_dir(&mut result_parts, &mut seen, d);
         }
     }
 
@@ -451,17 +460,18 @@ fn default_config(home: &Path) -> ServicesConfig {
                 log_file: "{projectDir}/data/repomind.log".into(),
                 ports: vec![3000, 3001],
                 health: HealthConfig {
-                    url: "http://localhost:3000/".into(),
+                    // API lives on 3001; Vite on 3000 only serves the shell.
+                    url: "http://localhost:3001/".into(),
                     contains: None,
                     status_ok: true,
-                    fallback_urls: vec!["http://localhost:3001/".into()],
+                    fallback_urls: vec![],
                     accept_http_codes: vec!["200".into(), "404".into()],
                     timeout_secs: 90,
                     poll_interval_secs: 2,
                 },
                 open_url: "http://localhost:3000".into(),
                 stop: Some(StopConfig {
-                    grace_secs: 15,
+                    grace_secs: 8,
                     cleanup_ports: vec![3000, 3001],
                 }),
             },
@@ -496,17 +506,32 @@ fn migrate_config(config: &mut ServicesConfig) -> bool {
     let mut changed = false;
     for svc in &mut config.services {
         if svc.id == "repomind" {
-            if svc.health.url.contains("127.0.0.1:3000") {
-                svc.health.url = "http://localhost:3000/".into();
+            // Old configs probed Vite (3000) and falsely reported healthy when API was down.
+            if svc.health.url.contains(":3000") {
+                svc.health.url = "http://localhost:3001/".into();
                 changed = true;
             }
-            if svc.health.fallback_urls.is_empty() {
-                svc.health.fallback_urls = vec!["http://localhost:3001/".into()];
+            if svc.health.url.contains("127.0.0.1:3001") {
+                svc.health.url = "http://localhost:3001/".into();
+                changed = true;
+            }
+            if !svc.health.fallback_urls.is_empty() {
+                svc.health.fallback_urls.clear();
                 changed = true;
             }
             if svc.health.accept_http_codes.is_empty() {
                 svc.health.accept_http_codes = vec!["200".into(), "404".into()];
                 changed = true;
+            }
+            if let Some(stop) = svc.stop.as_mut() {
+                if stop.grace_secs > 8 {
+                    stop.grace_secs = 8;
+                    changed = true;
+                }
+                if !stop.cleanup_ports.contains(&3000) || !stop.cleanup_ports.contains(&3001) {
+                    stop.cleanup_ports = vec![3000, 3001];
+                    changed = true;
+                }
             }
         }
     }
@@ -853,7 +878,11 @@ fn run_pre_start(def: &ServiceDefinition) -> Result<(), String> {
     Ok(())
 }
 
-fn probe_service(def: &ServiceDefinition, ctx: &ProbeContext) -> ServiceStatus {
+fn probe_service(
+    def: &ServiceDefinition,
+    ctx: &ProbeContext,
+    port_owners: &HashMap<u32, String>,
+) -> ServiceStatus {
     let project_dir = PathBuf::from(&def.project_dir);
     let pid_file = PathBuf::from(expand_template(&def.pid_file, &project_dir));
     let log_file = expand_template(&def.log_file, &project_dir);
@@ -866,6 +895,12 @@ fn probe_service(def: &ServiceDefinition, ctx: &ProbeContext) -> ServiceStatus {
     let pid_from_file = pid_file.exists().then(|| read_pid(&pid_file)).flatten();
     let all_ports_up = def.ports.iter().all(|p| port_listening(*p, ctx));
     let any_port_up = def.ports.iter().any(|p| port_listening(*p, ctx));
+    let foreign_owner = def.ports.iter().find_map(|p| {
+        port_owners
+            .get(p)
+            .filter(|owner| owner.as_str() != def.id)
+            .cloned()
+    });
     let mut state = "stopped".to_string();
     let mut pid: Option<u32> = None;
     let mut managed_externally = false;
@@ -873,7 +908,18 @@ fn probe_service(def: &ServiceDefinition, ctx: &ProbeContext) -> ServiceStatus {
     if let Some(p) = pid_from_file {
         if pid_alive(p) {
             pid = Some(p);
-            state = "running".to_string();
+            // Multi-port services: PID alone is not "fully running" if API ports are down.
+            if all_ports_up {
+                state = "running".to_string();
+            } else if any_port_up {
+                state = "partial".to_string();
+            } else {
+                state = "unhealthy".to_string();
+            }
+        } else if let Some(owner) = foreign_owner {
+            // Our pid is dead; ports belong to another registered service.
+            state = "port_conflict".to_string();
+            extras.insert("portOwner".into(), owner);
         } else if all_ports_up {
             state = "running".to_string();
             managed_externally = true;
@@ -881,9 +927,15 @@ fn probe_service(def: &ServiceDefinition, ctx: &ProbeContext) -> ServiceStatus {
                 .ports
                 .first()
                 .and_then(|port| port_listener_pids(*port).first().copied());
+        } else if any_port_up {
+            // Partial foreign listeners — do not claim healthy ownership.
+            state = "stale_pid".to_string();
         } else {
             state = "stale_pid".to_string();
         }
+    } else if let Some(owner) = foreign_owner.filter(|_| any_port_up) {
+        state = "port_conflict".to_string();
+        extras.insert("portOwner".into(), owner);
     } else if all_ports_up {
         state = "running".to_string();
         managed_externally = true;
@@ -912,7 +964,8 @@ fn probe_service(def: &ServiceDefinition, ctx: &ProbeContext) -> ServiceStatus {
         })
         .collect();
 
-    let health = if state == "running" || state == "partial" || any_port_up {
+    // Only report health when we believe this service owns the process.
+    let health = if matches!(state.as_str(), "running" | "partial" | "unhealthy") {
         if all_ports_up {
             if check_health_probe(&def.health, PROBE_HTTP_MAX_SECS) {
                 "ok".into()
@@ -935,7 +988,7 @@ fn probe_service(def: &ServiceDefinition, ctx: &ProbeContext) -> ServiceStatus {
     if let Some(op) = pending_op(&def.id) {
         match op.as_str() {
             "starting" | "restarting" => {
-                if state == "stopped" || state == "stale_pid" || state == "unhealthy" || state == "partial" {
+                if state == "stopped" || state == "stale_pid" || state == "unhealthy" || state == "partial" || state == "port_conflict" {
                     state = "starting".to_string();
                 }
             }
@@ -967,13 +1020,122 @@ fn probe_service(def: &ServiceDefinition, ctx: &ProbeContext) -> ServiceStatus {
     }
 }
 
+/// Map port → service id for ports claimed by registered definitions.
+fn build_port_owners(config: &ServicesConfig) -> HashMap<u32, String> {
+    let mut map = HashMap::new();
+    for svc in &config.services {
+        for port in &svc.ports {
+            map.entry(*port).or_insert_with(|| svc.id.clone());
+        }
+    }
+    map
+}
+
+fn format_port_conflicts(ports: &[u32], port_owners: &HashMap<u32, String>, self_id: &str) -> Option<String> {
+    let mut parts = Vec::new();
+    for port in ports {
+        if let Some(owner) = port_owners.get(port) {
+            if owner != self_id {
+                parts.push(format!("{} 已被服务「{}」占用", port, owner));
+            }
+        }
+    }
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join("；"))
+    }
+}
+
+fn listening_conflict_ports(def: &ServiceDefinition) -> Vec<u32> {
+    let ctx = ProbeContext {
+        listening_ports: collect_listening_ports(),
+    };
+    def.ports
+        .iter()
+        .copied()
+        .filter(|p| port_listening(*p, &ctx))
+        .collect()
+}
+
 // ── Lifecycle ─────────────────────────────────────────────────────────────────
+
+fn local_timestamp() -> String {
+    Command::new("date")
+        .arg("+%Y-%m-%d %H:%M:%S")
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim().to_string())
+        .unwrap_or_else(|| "unknown-time".into())
+}
+
+fn append_log_banner(log_file: &Path, message: &str) {
+    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(log_file) {
+        let _ = writeln!(file, "\n===== [{}] {} =====", local_timestamp(), message);
+        let _ = file.flush();
+    }
+}
+
+fn pump_stream_to_log<R: Read + Send + 'static>(reader: R, log_path: PathBuf) {
+    thread::spawn(move || {
+        let mut file = match OpenOptions::new().create(true).append(true).open(&log_path) {
+            Ok(f) => f,
+            Err(_) => return,
+        };
+        let buffered = BufReader::new(reader);
+        for line in buffered.lines() {
+            let Ok(line) = line else { break };
+            let _ = writeln!(file, "[{}] {}", local_timestamp(), line);
+            let _ = file.flush();
+        }
+    });
+}
 
 fn ensure_data_dir(path: &Path) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
     Ok(())
+}
+
+fn process_group_id(pid: u32) -> Option<u32> {
+    let output = Command::new("ps")
+        .args(["-o", "pgid=", "-p", &pid.to_string()])
+        .output()
+        .ok()?;
+    String::from_utf8_lossy(&output.stdout).trim().parse().ok()
+}
+
+fn kill_pid(pid: u32, force: bool) {
+    let sig = if force { "-9" } else { "-TERM" };
+    // If this pid is its own process-group leader (spawned with process_group(0)),
+    // kill the whole tree (npm → concurrently → vite/server).
+    if let Some(pgid) = process_group_id(pid) {
+        if pgid == pid {
+            let _ = Command::new("kill")
+                .args([sig, &format!("-{pgid}")])
+                .output();
+            return;
+        }
+    }
+    let _ = Command::new("kill")
+        .args([sig, &pid.to_string()])
+        .output();
+}
+
+fn kill_port_listeners(ports: &[u32], force: bool) {
+    for port in ports {
+        for pid in port_listener_pids(*port) {
+            kill_pid(pid, force);
+            if !force {
+                thread::sleep(Duration::from_millis(400));
+                if pid_alive(pid) {
+                    kill_pid(pid, true);
+                }
+            }
+        }
+    }
 }
 
 fn spawn_service(def: &ServiceDefinition) -> Result<u32, String> {
@@ -996,32 +1158,41 @@ fn spawn_service(def: &ServiceDefinition) -> Result<u32, String> {
     ensure_data_dir(&pid_file)?;
     ensure_data_dir(&log_file)?;
 
-    // Idempotent: already running
+    // Idempotent: already running *and* ready
     if let Some(existing) = read_pid(&pid_file) {
         if pid_alive(existing) {
-            return Ok(existing);
+            let ctx = ProbeContext {
+                listening_ports: collect_listening_ports(),
+            };
+            let ports_ready = def.ports.iter().all(|p| port_listening(*p, &ctx));
+            if ports_ready && check_health(&def.health) {
+                return Ok(existing);
+            }
+            // Half-dead tree: tear down before respawn (owned ports only for this service).
+            let _ = stop_service_impl(def, true, PortSweep::AllListeners);
+        } else {
+            let _ = fs::remove_file(&pid_file);
         }
-        let _ = fs::remove_file(&pid_file);
     }
 
-    // Port conflict guard (check primary port)
-    if let Some(primary) = def.ports.first() {
-        if port_listening(*primary, &ProbeContext {
-            listening_ports: collect_listening_ports(),
-        }) {
-            return Err(format!(
-                "端口 {} 已被占用，请先停止冲突进程",
-                primary
-            ));
-        }
+    // Port conflict guard — every declared port, not only the first.
+    let busy = listening_conflict_ports(def);
+    if !busy.is_empty() {
+        return Err(format!(
+            "端口 {} 已被占用，请先停止冲突进程（试跑不会强杀他人端口）",
+            busy
+                .iter()
+                .map(|p| p.to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
     }
 
     let cwd = expand_template(&def.start.cwd, &project_dir);
-    let log = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&log_file)
-        .map_err(|e| format!("无法打开日志文件: {}", e))?;
+    append_log_banner(
+        &log_file,
+        &format!("{} starting via {}", def.name, expand_template(&def.start.command[0], &project_dir)),
+    );
 
     let path_env = get_augmented_path();
     let raw_program = expand_template(&def.start.command[0], &project_dir);
@@ -1034,15 +1205,32 @@ fn spawn_service(def: &ServiceDefinition) -> Result<u32, String> {
     cmd.args(&cmd_args)
         .current_dir(&cwd)
         .stdin(Stdio::null())
-        .stdout(Stdio::from(log.try_clone().map_err(|e| e.to_string())?))
-        .stderr(Stdio::from(log))
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
         .env("PATH", &path_env)
         .envs(&def.start.env);
 
-    let child = cmd
-        .spawn()
-        .map_err(|e| format!("启动失败: {}", e))?;
+    // Put service in its own process group so stop can kill npm + children cleanly,
+    // without sharing EVA's process group.
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0);
+    }
+
+    let mut child = cmd.spawn().map_err(|e| format!("启动失败: {}", e))?;
+    if let Some(stdout) = child.stdout.take() {
+        pump_stream_to_log(stdout, log_file.clone());
+    }
+    if let Some(stderr) = child.stderr.take() {
+        pump_stream_to_log(stderr, log_file.clone());
+    }
+
     let pid = child.id();
+    // Reap in background to avoid zombies; do not kill on drop.
+    thread::spawn(move || {
+        let _ = child.wait();
+    });
     fs::write(&pid_file, pid.to_string()).map_err(|e| e.to_string())?;
 
     Ok(pid)
@@ -1067,8 +1255,9 @@ fn wait_until_ready(def: &ServiceDefinition, pid: u32) -> Result<(), String> {
         let ports_ready = def.ports.iter().all(|p| port_listening(*p, &ctx));
         let health_ok = check_health(&def.health);
 
-        if def.id == "repomind" {
-            if ports_ready {
+        // Multi-port apps need every declared port + health (e.g. Vite + API).
+        if def.ports.len() > 1 {
+            if ports_ready && health_ok {
                 return Ok(());
             }
         } else if health_ok {
@@ -1186,11 +1375,19 @@ fn tail_log_file(path: &Path, lines: usize) -> String {
         .join("\n")
 }
 
-fn stop_service_impl(def: &ServiceDefinition, force: bool) -> ServiceActionResult {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PortSweep {
+    /// Normal stop: also kill leftover listeners on cleanup_ports.
+    AllListeners,
+    /// Probe / safe stop: only kill our pid file / known process group.
+    OwnedOnly,
+}
+
+fn stop_service_impl(def: &ServiceDefinition, force: bool, sweep: PortSweep) -> ServiceActionResult {
     let project_dir = PathBuf::from(&def.project_dir);
     let pid_file = PathBuf::from(expand_template(&def.pid_file, &project_dir));
     let stop_cfg = def.stop.clone().unwrap_or(StopConfig {
-        grace_secs: 15,
+        grace_secs: 8,
         cleanup_ports: def.ports.clone(),
     });
 
@@ -1200,34 +1397,34 @@ fn stop_service_impl(def: &ServiceDefinition, force: bool) -> ServiceActionResul
             pids.push(p);
         }
     }
-    for port in &stop_cfg.cleanup_ports {
-        for p in port_listener_pids(*port) {
-            if !pids.contains(&p) {
-                pids.push(p);
+
+    // Never harvest foreign port listeners during OwnedOnly (probe teardown).
+    if sweep == PortSweep::AllListeners {
+        for port in &stop_cfg.cleanup_ports {
+            for p in port_listener_pids(*port) {
+                if !pids.contains(&p) {
+                    pids.push(p);
+                }
             }
         }
     }
 
     if pids.is_empty() {
         let _ = fs::remove_file(&pid_file);
+        if sweep == PortSweep::AllListeners {
+            kill_port_listeners(&stop_cfg.cleanup_ports, true);
+        }
         return ServiceActionResult {
             success: true,
             message: format!("{} 未在运行", def.name),
         };
     }
 
-    if force {
-        for pid in &pids {
-            let _ = Command::new("kill")
-                .args(["-9", &pid.to_string()])
-                .output();
-        }
-    } else {
-        for pid in &pids {
-            let _ = Command::new("kill")
-                .args(["-TERM", &pid.to_string()])
-                .output();
-        }
+    for pid in &pids {
+        kill_pid(*pid, force);
+    }
+
+    if !force {
         for _ in 0..stop_cfg.grace_secs {
             if pids.iter().all(|p| !pid_alive(*p)) {
                 break;
@@ -1236,34 +1433,54 @@ fn stop_service_impl(def: &ServiceDefinition, force: bool) -> ServiceActionResul
         }
         for pid in &pids {
             if pid_alive(*pid) {
-                let _ = Command::new("kill")
-                    .args(["-9", &pid.to_string()])
-                    .output();
+                kill_pid(*pid, true);
             }
         }
     }
 
     let _ = fs::remove_file(&pid_file);
 
-    // Port cleanup for child processes (e.g. npm concurrently)
-    for port in &stop_cfg.cleanup_ports {
-        for pid in port_listener_pids(*port) {
-            let _ = Command::new("kill")
-                .args(["-TERM", &pid.to_string()])
-                .output();
-            thread::sleep(Duration::from_secs(1));
-            if pid_alive(pid) {
-                let _ = Command::new("kill")
-                    .args(["-9", &pid.to_string()])
-                    .output();
-            }
-        }
+    if sweep == PortSweep::AllListeners {
+        // Catch orphaned vite/server children that survived npm exit.
+        kill_port_listeners(&stop_cfg.cleanup_ports, true);
     }
+    append_log_banner(
+        &PathBuf::from(expand_template(&def.log_file, &project_dir)),
+        &format!("{} stopped", def.name),
+    );
 
     ServiceActionResult {
         success: true,
         message: format!("{} 已停止", def.name),
     }
+}
+
+/// Stop only the process we started for a probe (never kill strangers on the same port).
+fn stop_probe_process(def: &ServiceDefinition, spawned_pid: Option<u32>) {
+    let project_dir = PathBuf::from(&def.project_dir);
+    let pid_file = PathBuf::from(expand_template(&def.pid_file, &project_dir));
+
+    let mut roots: Vec<u32> = Vec::new();
+    if let Some(p) = spawned_pid {
+        if pid_alive(p) {
+            roots.push(p);
+        }
+    }
+    if let Some(p) = read_pid(&pid_file) {
+        if pid_alive(p) && !roots.contains(&p) {
+            roots.push(p);
+        }
+    }
+
+    for pid in &roots {
+        kill_pid(*pid, true);
+        // Brief wait then escalate if needed (kill_pid already uses -9 when force).
+        thread::sleep(Duration::from_millis(200));
+        if pid_alive(*pid) {
+            kill_pid(*pid, true);
+        }
+    }
+    let _ = fs::remove_file(&pid_file);
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1292,20 +1509,28 @@ pub fn service_list(app: AppHandle) -> Result<Vec<ServiceMeta>, String> {
 }
 
 #[tauri::command]
-pub fn service_status(app: AppHandle, id: Option<String>) -> Result<Vec<ServiceStatus>, String> {
-    let config = load_config(&app)?;
-    let ctx = ProbeContext {
-        listening_ports: collect_listening_ports(),
-    };
-    if let Some(sid) = id {
-        let def = find_service(&config, &sid)?;
-        return Ok(vec![probe_service(def, &ctx)]);
-    }
-    Ok(config
-        .services
-        .iter()
-        .map(|s| probe_service(s, &ctx))
-        .collect())
+pub async fn service_status(
+    app: AppHandle,
+    id: Option<String>,
+) -> Result<Vec<ServiceStatus>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let config = load_config(&app)?;
+        let ctx = ProbeContext {
+            listening_ports: collect_listening_ports(),
+        };
+        let port_owners = build_port_owners(&config);
+        if let Some(sid) = id {
+            let def = find_service(&config, &sid)?;
+            return Ok(vec![probe_service(def, &ctx, &port_owners)]);
+        }
+        Ok(config
+            .services
+            .iter()
+            .map(|s| probe_service(s, &ctx, &port_owners))
+            .collect())
+    })
+    .await
+    .map_err(|e| format!("状态查询中断: {}", e))?
 }
 
 #[tauri::command]
@@ -1337,7 +1562,7 @@ pub fn service_stop(app: AppHandle, id: String, force: Option<bool>) -> Result<S
         });
     }
     if force.unwrap_or(false) {
-        let result = stop_service_impl(&def, true);
+        let result = stop_service_impl(&def, true, PortSweep::AllListeners);
         return Ok(result);
     }
     set_pending(&id, "stopping");
@@ -1382,10 +1607,11 @@ pub fn service_open(app: AppHandle, id: String) -> Result<(), String> {
     let ctx = ProbeContext {
         listening_ports: collect_listening_ports(),
     };
-    let status = probe_service(def, &ctx);
+    let port_owners = build_port_owners(&config);
+    let status = probe_service(def, &ctx, &port_owners);
     let can_open = matches!(status.state.as_str(), "running" | "partial")
         && matches!(status.health.as_str(), "ok" | "ports_ok")
-        || status.ports.iter().any(|p| p.listening);
+        || (status.ports.iter().any(|p| p.listening) && status.state != "port_conflict");
     if !can_open {
         return Err(format!("{} 未运行，请先启动", def.name));
     }
@@ -1494,6 +1720,320 @@ pub fn service_tail_log(app: AppHandle, id: String, lines: Option<u32>) -> Resul
     Ok(tail_log_file(&log_file, n))
 }
 
+fn save_config(app: &AppHandle, config: &ServicesConfig) -> Result<(), String> {
+    fs::create_dir_all(user_data(app)).map_err(|e| e.to_string())?;
+    let json = serde_json::to_string_pretty(config).map_err(|e| e.to_string())?;
+    fs::write(config_path(app), json).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn service_pick_folder(app: AppHandle) -> Result<Option<String>, String> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    app.run_on_main_thread(move || {
+        let folder = rfd::FileDialog::new()
+            .set_title("选择项目目录")
+            .pick_folder();
+        let _ = tx.send(folder.map(|p| p.to_string_lossy().into_owned()));
+    })
+    .map_err(|e| e.to_string())?;
+    rx.recv().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn service_scan_project(
+    app: AppHandle,
+    project_dir: String,
+) -> Result<crate::service_discovery::CandidateConfig, String> {
+    let path = PathBuf::from(&project_dir);
+    if !path.is_absolute() || project_dir.contains("..") {
+        return Err("非法项目路径".into());
+    }
+    let mut candidate = crate::service_discovery::scan_project(&path)?;
+    let config = load_config(&app)?;
+    let owners = build_port_owners(&config);
+    if let Some(msg) = format_port_conflicts(&candidate.definition.ports, &owners, &candidate.definition.id)
+    {
+        candidate.warnings.push(format!("端口冲突风险：{}。请改端口或先停掉占用方后再试跑。", msg));
+        candidate.confidence = (candidate.confidence * 0.5).min(0.4);
+    }
+    let busy = listening_conflict_ports(&candidate.definition);
+    if !busy.is_empty() {
+        candidate.warnings.push(format!(
+            "当前已有进程监听端口 {}，试跑会被拒绝（不会强杀）",
+            busy
+                .iter()
+                .map(|p| p.to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+    Ok(candidate)
+}
+
+/// Try-start a candidate on a worker thread (keeps UI responsive), then stop only our process.
+#[tauri::command]
+pub async fn service_probe_candidate(
+    app: AppHandle,
+    definition: ServiceDefinition,
+    timeout_secs: Option<u64>,
+    attempt: Option<u32>,
+) -> Result<crate::service_discovery::ProbeReport, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        probe_candidate_sync(app, definition, timeout_secs, attempt)
+    })
+    .await
+    .map_err(|e| format!("试跑任务中断: {}", e))?
+}
+
+fn probe_candidate_sync(
+    app: AppHandle,
+    definition: ServiceDefinition,
+    timeout_secs: Option<u64>,
+    attempt: Option<u32>,
+) -> Result<crate::service_discovery::ProbeReport, String> {
+    use crate::service_discovery::{prepare_probe_definition, ProbePortStatus, ProbeReport};
+    use std::time::Instant;
+
+    if definition.id.trim().is_empty() {
+        return Err("服务 id 不能为空".into());
+    }
+    if definition.start.command.is_empty() {
+        return Err("启动命令不能为空".into());
+    }
+    if definition.project_dir.contains("..") || !Path::new(&definition.project_dir).is_absolute() {
+        return Err("非法项目路径".into());
+    }
+
+    let timeout = timeout_secs.unwrap_or(35).clamp(15, 90);
+    let attempt_n = attempt.unwrap_or(1);
+    let original_id = definition.id.clone();
+    let mut def = prepare_probe_definition(definition, timeout);
+    // Avoid colliding with a registered service of the same id during probe.
+    def.id = format!("probe-{}", original_id);
+
+    let started = Instant::now();
+    let project_dir = PathBuf::from(&def.project_dir);
+    let log_file = PathBuf::from(expand_template(&def.log_file, &project_dir));
+
+    // Fail fast on registered-service port claims — never kill them.
+    let config = load_config(&app)?;
+    let owners = build_port_owners(&config);
+    if let Some(msg) = format_port_conflicts(&def.ports, &owners, &original_id) {
+        return Ok(ProbeReport {
+            success: false,
+            message: format!("端口与已注册服务冲突：{}。请修改端口后再试。", msg),
+            state: "port_conflict".into(),
+            health: "unknown".into(),
+            ports: def
+                .ports
+                .iter()
+                .map(|p| ProbePortStatus {
+                    port: *p,
+                    listening: false,
+                })
+                .collect(),
+            log_tail: None,
+            elapsed_ms: started.elapsed().as_millis() as u64,
+            attempt: attempt_n,
+        });
+    }
+
+    let spawn_result = spawn_service(&def);
+    let spawned_pid = spawn_result.as_ref().ok().copied();
+    let report = match spawn_result {
+        Ok(pid) => match wait_until_ready(&def, pid) {
+            Ok(()) => {
+                let ctx = ProbeContext {
+                    listening_ports: collect_listening_ports(),
+                };
+                let ports: Vec<ProbePortStatus> = def
+                    .ports
+                    .iter()
+                    .map(|p| ProbePortStatus {
+                        port: *p,
+                        listening: port_listening(*p, &ctx),
+                    })
+                    .collect();
+                let health = if check_health(&def.health) {
+                    "ok"
+                } else if ports.iter().all(|p| p.listening) {
+                    "ports_ok"
+                } else {
+                    "no_response"
+                };
+                ProbeReport {
+                    success: true,
+                    message: "试启动成功，服务已就绪".into(),
+                    state: "running".into(),
+                    health: health.into(),
+                    ports,
+                    log_tail: Some(tail_log_file(&log_file, 40)),
+                    elapsed_ms: started.elapsed().as_millis() as u64,
+                    attempt: attempt_n,
+                }
+            }
+            Err(e) => {
+                let ctx = ProbeContext {
+                    listening_ports: collect_listening_ports(),
+                };
+                let ports: Vec<ProbePortStatus> = def
+                    .ports
+                    .iter()
+                    .map(|p| ProbePortStatus {
+                        port: *p,
+                        listening: port_listening(*p, &ctx),
+                    })
+                    .collect();
+                ProbeReport {
+                    success: false,
+                    message: e,
+                    state: "unhealthy".into(),
+                    health: "no_response".into(),
+                    ports,
+                    log_tail: Some(tail_log_file(&log_file, 80)),
+                    elapsed_ms: started.elapsed().as_millis() as u64,
+                    attempt: attempt_n,
+                }
+            }
+        },
+        Err(e) => {
+            let ctx = ProbeContext {
+                listening_ports: collect_listening_ports(),
+            };
+            ProbeReport {
+                success: false,
+                message: e,
+                state: "stopped".into(),
+                health: "unknown".into(),
+                ports: def
+                    .ports
+                    .iter()
+                    .map(|p| ProbePortStatus {
+                        port: *p,
+                        listening: port_listening(*p, &ctx),
+                    })
+                    .collect(),
+                log_tail: if log_file.exists() {
+                    Some(tail_log_file(&log_file, 40))
+                } else {
+                    None
+                },
+                elapsed_ms: started.elapsed().as_millis() as u64,
+                attempt: attempt_n,
+            }
+        }
+    };
+
+    // Tear down ONLY our probe process — never sweep foreign port listeners.
+    stop_probe_process(&def, spawned_pid);
+
+    Ok(report)
+}
+
+#[tauri::command]
+pub fn service_upsert(app: AppHandle, definition: ServiceDefinition) -> Result<ServiceActionResult, String> {
+    if definition.id.trim().is_empty() {
+        return Err("服务 id 不能为空".into());
+    }
+    if definition.id.starts_with("probe-") {
+        return Err("非法服务 id".into());
+    }
+    if definition.start.command.is_empty() {
+        return Err("启动命令不能为空".into());
+    }
+    if definition.project_dir.contains("..") || !Path::new(&definition.project_dir).is_absolute() {
+        return Err("非法项目路径".into());
+    }
+    if !Path::new(&definition.project_dir).is_dir() {
+        return Err(format!("项目目录不存在: {}", definition.project_dir));
+    }
+
+    let mut config = load_config(&app)?;
+    let mut def = definition;
+    // Normalize runtime files away from probe paths.
+    if def.pid_file.contains("eva-probe") {
+        def.pid_file = "{projectDir}/data/eva-service.pid".into();
+    }
+    if def.log_file.contains("eva-probe") {
+        def.log_file = "{projectDir}/data/eva-service.log".into();
+    }
+    if def.health.timeout_secs < 30 {
+        def.health.timeout_secs = 90;
+    }
+    if let Some(stop) = def.stop.as_mut() {
+        if stop.cleanup_ports.is_empty() {
+            stop.cleanup_ports = def.ports.clone();
+        }
+    }
+
+    let owners = build_port_owners(&config);
+    let conflict = format_port_conflicts(&def.ports, &owners, &def.id);
+
+    let name = def.name.clone();
+    if let Some(existing) = config.services.iter_mut().find(|s| s.id == def.id) {
+        *existing = def;
+        save_config(&app, &config)?;
+        let mut message = format!("已更新服务 {}", name);
+        if let Some(c) = conflict {
+            message.push_str(&format!("（警告：{}）", c));
+        }
+        Ok(ServiceActionResult {
+            success: true,
+            message,
+        })
+    } else {
+        config.services.push(def);
+        save_config(&app, &config)?;
+        let mut message = format!("已添加服务 {}", name);
+        if let Some(c) = conflict {
+            message.push_str(&format!("（警告：{}）", c));
+        }
+        Ok(ServiceActionResult {
+            success: true,
+            message,
+        })
+    }
+}
+
+/// Stop (if needed) then remove the service from services.json.
+#[tauri::command]
+pub async fn service_remove(app: AppHandle, id: String) -> Result<ServiceActionResult, String> {
+    tauri::async_runtime::spawn_blocking(move || service_remove_sync(app, id))
+        .await
+        .map_err(|e| format!("删除任务中断: {}", e))?
+}
+
+fn service_remove_sync(app: AppHandle, id: String) -> Result<ServiceActionResult, String> {
+    if id.trim().is_empty() || id.starts_with("probe-") {
+        return Err("非法服务 id".into());
+    }
+    if let Some(op) = pending_op(&id) {
+        return Ok(ServiceActionResult {
+            success: false,
+            message: format!("服务正在{}，请稍候再删除", pending_op_label(&op)),
+        });
+    }
+
+    let mut config = load_config(&app)?;
+    let Some(idx) = config.services.iter().position(|s| s.id == id) else {
+        return Err(format!("未知服务: {}", id));
+    };
+    let def = config.services[idx].clone();
+    let name = def.name.clone();
+
+    // Force-stop so we don't leave orphaned processes after unregistering.
+    let _ = stop_service_impl(&def, true, PortSweep::AllListeners);
+    clear_pending(&id);
+
+    config.services.remove(idx);
+    save_config(&app, &config)?;
+
+    Ok(ServiceActionResult {
+        success: true,
+        message: format!("已删除服务 {}", name),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1547,6 +2087,17 @@ mod tests {
     fn strip_orphan_sgr_codes() {
         let raw = "[94mVoice:[0m hello";
         assert_eq!(strip_ansi(raw), "Voice: hello");
+    }
+
+  #[test]
+    fn format_port_conflicts_skips_self() {
+        let mut owners = HashMap::new();
+        owners.insert(3001, "repomind".into());
+        owners.insert(3000, "repomind".into());
+        assert!(format_port_conflicts(&[3001], &owners, "repomind").is_none());
+        let msg = format_port_conflicts(&[3001], &owners, "beigushi").unwrap();
+        assert!(msg.contains("repomind"));
+        assert!(msg.contains("3001"));
     }
 
     #[test]

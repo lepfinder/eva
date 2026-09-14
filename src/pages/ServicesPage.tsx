@@ -13,6 +13,8 @@ import {
   FileText,
   FolderOpen,
   ChevronDown,
+  Plus,
+  Trash2,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import {
@@ -26,8 +28,19 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 import { useLocalServices, ServiceStatus } from '@/hooks/useLocalServices'
 import { ServiceLogDialog } from '@/components/services/ServiceLogDialog'
+import { RegisterServiceChat } from '@/components/services/RegisterServiceChat'
 import { formatUptime } from '@/utils/formatUptime'
 import cursorIcon from '@/assets/ides/cursor.png'
 import antigravityIcon from '@/assets/ides/antigravity.png'
@@ -78,10 +91,13 @@ function stateBadge(state: ServiceStatus['state'], health: ServiceStatus['health
   if (state === 'stopping') {
     return <Badge variant="secondary">停止中</Badge>
   }
-  if ((state === 'running' || state === 'partial') && (health === 'ok' || health === 'ports_ok')) {
+  if (state === 'partial') {
+    return <Badge className="bg-amber-500 hover:bg-amber-500">部分就绪</Badge>
+  }
+  if (state === 'running' && (health === 'ok' || health === 'ports_ok')) {
     return <Badge className="bg-emerald-600 hover:bg-emerald-600">运行中</Badge>
   }
-  if (state === 'running' || state === 'partial' || state === 'unhealthy') {
+  if (state === 'running' || state === 'unhealthy') {
     return <Badge variant="secondary">未就绪</Badge>
   }
   if (state === 'port_conflict') {
@@ -135,11 +151,14 @@ export function ServicesPage(): React.ReactElement {
     openInIde,
     ides,
     tailLog,
+    removeService,
   } = useLocalServices()
 
   const [logTarget, setLogTarget] = useState<{ id: string; name: string; logFile?: string } | null>(
     null
   )
+  const [wizardOpen, setWizardOpen] = useState(false)
+  const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(null)
 
   const isBusy = (id: string, actions: string[]) =>
     actions.some((a) => actionLoading === `${a}-${id}`) ||
@@ -160,14 +179,20 @@ export function ServicesPage(): React.ReactElement {
             管理本地开发服务，支持启动、停止与健康检查
           </p>
         </div>
-        <Button variant="outline" size="sm" onClick={() => refresh()} disabled={refreshing}>
-          {refreshing ? (
-            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-          ) : (
-            <RefreshCw className="mr-2 h-4 w-4" />
-          )}
-          {t('common.refresh')}
-        </Button>
+        <div className="flex items-center gap-2 shrink-0">
+          <Button size="sm" onClick={() => setWizardOpen(true)}>
+            <Plus className="mr-2 h-4 w-4" />
+            添加项目
+          </Button>
+          <Button variant="outline" size="sm" onClick={() => refresh()} disabled={refreshing}>
+            {refreshing ? (
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            ) : (
+              <RefreshCw className="mr-2 h-4 w-4" />
+            )}
+            {t('common.refresh')}
+          </Button>
+        </div>
       </div>
 
       {error && (
@@ -191,8 +216,12 @@ export function ServicesPage(): React.ReactElement {
               <Server className="h-16 w-16 text-muted-foreground/30" />
               <h3 className="mt-4 text-lg font-medium">暂无注册服务</h3>
               <p className="mt-2 text-center text-sm text-muted-foreground">
-                请检查 userData/services.json 配置
+                点击「添加项目」选择目录，EVA 会分析并试跑后写入配置
               </p>
+              <Button className="mt-4" onClick={() => setWizardOpen(true)}>
+                <Plus className="mr-2 h-4 w-4" />
+                添加项目
+              </Button>
             </CardContent>
           </Card>
         ) : (
@@ -207,6 +236,11 @@ export function ServicesPage(): React.ReactElement {
                       {svc.extras?.managedBy === 'external' && (
                         <Badge variant="outline" className="font-normal">
                           外部启动
+                        </Badge>
+                      )}
+                      {svc.state === 'port_conflict' && svc.extras?.portOwner && (
+                        <Badge variant="outline" className="font-normal text-destructive">
+                          与 {svc.extras.portOwner} 冲突
                         </Badge>
                       )}
                     </CardTitle>
@@ -267,7 +301,11 @@ export function ServicesPage(): React.ReactElement {
                   <div className="flex flex-wrap gap-2 shrink-0">
                     <Button
                       size="sm"
-                      variant="default"
+                      variant={
+                        svc.state === 'running' || svc.state === 'partial' || svc.state === 'unhealthy'
+                          ? 'outline'
+                          : 'default'
+                      }
                       disabled={isBusy(svc.id, ['start', 'restart', 'stop'])}
                       onClick={() => startService(svc.id)}
                     >
@@ -280,7 +318,11 @@ export function ServicesPage(): React.ReactElement {
                     </Button>
                     <Button
                       size="sm"
-                      variant="outline"
+                      variant={
+                        svc.state === 'running' || svc.state === 'partial' || svc.state === 'unhealthy'
+                          ? 'default'
+                          : 'outline'
+                      }
                       disabled={isBusy(svc.id, ['start', 'restart', 'stop'])}
                       onClick={() => stopService(svc.id)}
                     >
@@ -320,6 +362,20 @@ export function ServicesPage(): React.ReactElement {
                     >
                       <FileText className="mr-1 h-4 w-4" />
                       日志
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="text-destructive hover:text-destructive"
+                      disabled={isBusy(svc.id, ['start', 'restart', 'stop', 'remove'])}
+                      onClick={() => setDeleteTarget({ id: svc.id, name: svc.name })}
+                    >
+                      {actionLoading === `remove-${svc.id}` ? (
+                        <Loader2 className="mr-1 h-4 w-4 animate-spin" />
+                      ) : (
+                        <Trash2 className="mr-1 h-4 w-4" />
+                      )}
+                      删除
                     </Button>
                   </div>
                 </div>
@@ -385,6 +441,42 @@ export function ServicesPage(): React.ReactElement {
         onClose={() => setLogTarget(null)}
         onFetchLog={tailLog}
       />
+
+      <RegisterServiceChat
+        open={wizardOpen}
+        onOpenChange={setWizardOpen}
+        onCommitted={() => void refresh()}
+      />
+
+      <AlertDialog
+        open={!!deleteTarget}
+        onOpenChange={(open) => {
+          if (!open) setDeleteTarget(null)
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>删除服务？</AlertDialogTitle>
+            <AlertDialogDescription>
+              将停止「{deleteTarget?.name}」并从列表中移除，不会删除项目目录或源码。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>取消</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={() => {
+                if (!deleteTarget) return
+                const id = deleteTarget.id
+                setDeleteTarget(null)
+                void removeService(id)
+              }}
+            >
+              删除
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }

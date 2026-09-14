@@ -134,6 +134,12 @@ export function useLocalServices() {
     }
   }, [refresh])
 
+  useEffect(() => {
+    if (!actionMessage) return
+    const timer = setTimeout(() => setActionMessage(null), 6000)
+    return () => clearTimeout(timer)
+  }, [actionMessage])
+
   const runAction = useCallback(
     async (key: string, fn: () => Promise<ServiceActionResult>) => {
       setActionLoading(key)
@@ -187,6 +193,11 @@ export function useLocalServices() {
     }
   }, [])
 
+  const removeService = useCallback(
+    (id: string) => runAction(`remove-${id}`, () => window.api.services.remove(id)),
+    [runAction]
+  )
+
   const tailLog = useCallback(
     (id: string, lines = 30) => window.api.services.tailLog(id, lines),
     []
@@ -207,5 +218,6 @@ export function useLocalServices() {
     openInIde,
     ides,
     tailLog,
+    removeService,
   }
 }

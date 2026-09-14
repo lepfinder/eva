@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react'
-import { invoke } from '@tauri-apps/api/core'
+import { invoke, convertFileSrc } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import {
     ClipboardList,
@@ -23,11 +23,10 @@ interface ClipboardItem {
     sourceApp: string
     timestamp: number
     imagePath?: string
+    thumbPath?: string
     language?: string
     colorValue?: string
 }
-
-const imageCache = new Map<string, string>()
 
 function formatRelativeTime(timestamp: number): string {
     const diff = Math.floor((Date.now() - timestamp) / 1000)
@@ -38,33 +37,29 @@ function formatRelativeTime(timestamp: number): string {
     return `${hours}小时前`
 }
 
-// 图片缩略图组件 (直接通过 Rust 获取 base64 预览)
-function ClipThumbnail({ imagePath }: { imagePath: string }) {
-    const [dataUrl, setDataUrl] = useState<string>(imageCache.get(imagePath) || '')
+function ClipThumbnail({ imagePath, thumbPath }: { imagePath: string; thumbPath?: string }) {
+    const [src, setSrc] = useState(() => convertFileSrc(thumbPath || imagePath))
+    const [failedAsset, setFailedAsset] = useState(false)
 
     useEffect(() => {
-        if (!imagePath) return
-        if (imageCache.has(imagePath)) {
-            setDataUrl(imageCache.get(imagePath)!)
-            return
-        }
+        setSrc(convertFileSrc(thumbPath || imagePath))
+        setFailedAsset(false)
+    }, [imagePath, thumbPath])
 
-        let isCancelled = false
+    useEffect(() => {
+        if (!failedAsset) return
+        let cancelled = false
         invoke<string>('clipboard_get_image_data', { imagePath })
             .then((res) => {
-                if (!isCancelled && res) {
-                    imageCache.set(imagePath, res)
-                    setDataUrl(res)
-                }
+                if (!cancelled && res) setSrc(res)
             })
             .catch(() => {})
-
         return () => {
-            isCancelled = true
+            cancelled = true
         }
-    }, [imagePath])
+    }, [failedAsset, imagePath])
 
-    if (!dataUrl) {
+    if (!src) {
         return (
             <div className="w-12 h-10 rounded-lg bg-zinc-100 dark:bg-zinc-800 flex items-center justify-center shrink-0 border border-zinc-200/60 dark:border-zinc-700/60">
                 <Image className="h-4 w-4 text-zinc-400 animate-pulse" />
@@ -74,7 +69,14 @@ function ClipThumbnail({ imagePath }: { imagePath: string }) {
 
     return (
         <div className="w-12 h-10 rounded-lg overflow-hidden shrink-0 border border-zinc-200/80 dark:border-zinc-700/80 bg-zinc-50 dark:bg-zinc-900 shadow-2xs">
-            <img src={dataUrl} alt="剪贴图片预览" className="w-full h-full object-cover" />
+            <img
+                src={src}
+                alt="剪贴图片预览"
+                className="w-full h-full object-cover"
+                onError={() => {
+                    if (!failedAsset) setFailedAsset(true)
+                }}
+            />
         </div>
     )
 }
@@ -102,7 +104,7 @@ export function QuickClipsCard(): React.ReactElement {
 
         // 监听剪贴板更新事件，实时响应
         let unlisten: (() => void) | undefined
-        listen('clipboard-updated', () => {
+        listen('clipboard:newItem', () => {
             loadRecentItems()
         }).then(fn => {
             unlisten = fn
@@ -116,10 +118,14 @@ export function QuickClipsCard(): React.ReactElement {
     const handleCopy = async (e: React.MouseEvent, item: ClipboardItem) => {
         e.stopPropagation()
         try {
-            if (window.api?.clipboard?.writeToClipboard) {
-                await window.api.clipboard.writeToClipboard(item.id)
-            } else {
-                await navigator.clipboard.writeText(item.content)
+            if (!window.api?.clipboard?.writeToClipboard) {
+                console.error('clipboard writeToClipboard API unavailable')
+                return
+            }
+            const ok = await window.api.clipboard.writeToClipboard(item.id)
+            if (!ok) {
+                console.error('Failed to write clipboard: backend returned false')
+                return
             }
             setCopiedId(item.id)
             setTimeout(() => setCopiedId(null), 1500)
@@ -183,7 +189,7 @@ export function QuickClipsCard(): React.ReactElement {
                             >
                                 {/* 左侧：真实图片缩略图 或 类型图标/色块 */}
                                 {isImage ? (
-                                    <ClipThumbnail imagePath={item.imagePath!} />
+                                    <ClipThumbnail imagePath={item.imagePath!} thumbPath={item.thumbPath} />
                                 ) : isColor ? (
                                     <div 
                                         className="w-10 h-10 rounded-lg shrink-0 border border-black/10 dark:border-white/10 shadow-inner flex items-center justify-center"

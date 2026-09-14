@@ -1,11 +1,10 @@
 /**
  * 剪贴板历史模块
- * 与原 Electron 版本功能完全对等:
- *  - 每秒轮询系统剪贴板（文本 + 图片）
+ *  - changeCount 轮询：仅在系统剪贴板变化时读内容
  *  - 类型智能识别：text / image / html / color / code
- *  - SQLite 持久化存储（最多 3000 条）
- *  - 提供 get / search / delete / clear / write-back / stats 命令
- *  - 新条目通过 Tauri 事件推送给前端
+ *  - SQLite 持久化（最多 10000 条）；连接按调用打开，状态锁不持有 Connection
+ *  - 图片入库时写缩略图，列表走 asset protocol
+ *  - html：content 存纯文本，html_content 存富文本，回填写 public.html
  */
 
 use arboard::Clipboard;
@@ -13,13 +12,17 @@ use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::process::Command;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager};
 use url::Url;
 use uuid::Uuid;
+
+const MAX_ITEMS: i64 = 10000;
+const CLEANUP_EVERY_N_INSERTS: u32 = 50;
+const THUMB_MAX_EDGE: u32 = 400;
 
 // ──────────────────────────────────────────────────
 // Types
@@ -31,13 +34,19 @@ pub struct ClipboardItem {
     pub id: String,
     #[serde(rename = "type")]
     pub item_type: String, // text | image | html | color | code
-    pub content: String,   // text or image file path
+    pub content: String,   // plain text or image file path
     pub preview: String,
     pub source_app: String,
     pub timestamp: u64, // ms since epoch
     pub image_path: Option<String>,
+    /// Thumbnail path for list UI (asset protocol). Computed / written beside original.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thumb_path: Option<String>,
     pub language: Option<String>,
     pub color_value: Option<String>,
+    /// Full HTML for rich-text paste-back. Omitted from list/search IPC payloads.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub html_content: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -48,19 +57,19 @@ pub struct ClipboardStats {
 }
 
 // ──────────────────────────────────────────────────
-// Internal state (shared across commands and polling thread)
+// Internal state (small fields only — no DB connection)
 // ──────────────────────────────────────────────────
 
 pub struct ClipboardState {
-    db: Option<Connection>,
+    db_path: PathBuf,
     image_dir: PathBuf,
     last_text: String,
     last_image_hash: String,
-    last_url_detected: String,
-    /// Absolute timestamp (ms) until which the polling thread should NOT record
-    /// a new image entry.  Set whenever we write an image back to the clipboard
-    /// from history, so the polling thread doesn't immediately re-record it.
-    image_write_cooldown_until: u64,
+    /// Last observed NSPasteboard.changeCount (-1 = unset / non-macOS fallback).
+    last_change_count: i64,
+    /// True while we are writing back to the system clipboard (poller must skip).
+    own_write_in_progress: bool,
+    inserts_since_cleanup: u32,
 }
 
 impl ClipboardState {
@@ -68,49 +77,67 @@ impl ClipboardState {
         let db_path = app_data_dir.join("userData").join("clipboard-history.db");
         let image_dir = app_data_dir.join("userData").join("clipboard-images");
 
-        // Ensure dirs exist
         if let Some(parent) = db_path.parent() {
             fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
         fs::create_dir_all(&image_dir).map_err(|e| e.to_string())?;
 
-        let conn = Connection::open(&db_path).map_err(|e| e.to_string())?;
-        conn.execute_batch(
-            "
-            PRAGMA journal_mode=WAL;
-            CREATE TABLE IF NOT EXISTS clipboard_items (
-                id         TEXT PRIMARY KEY,
-                type       TEXT NOT NULL,
-                content    TEXT NOT NULL,
-                preview    TEXT NOT NULL,
-                source_app TEXT NOT NULL,
-                timestamp  INTEGER NOT NULL,
-                image_path TEXT,
-                language   TEXT,
-                color_value TEXT
+        // Migrate schema once at startup; runtime opens fresh connections per call.
+        {
+            let conn = open_clipboard_db(&db_path)?;
+            conn.execute_batch(
+                "
+                PRAGMA journal_mode=WAL;
+                CREATE TABLE IF NOT EXISTS clipboard_items (
+                    id         TEXT PRIMARY KEY,
+                    type       TEXT NOT NULL,
+                    content    TEXT NOT NULL,
+                    preview    TEXT NOT NULL,
+                    source_app TEXT NOT NULL,
+                    timestamp  INTEGER NOT NULL,
+                    image_path TEXT,
+                    language   TEXT,
+                    color_value TEXT,
+                    html_content TEXT
+                );
+                CREATE INDEX IF NOT EXISTS idx_timestamp ON clipboard_items(timestamp DESC);
+                ",
+            )
+            .map_err(|e| e.to_string())?;
+            let _ = conn.execute(
+                "ALTER TABLE clipboard_items ADD COLUMN html_content TEXT",
+                [],
             );
-            CREATE INDEX IF NOT EXISTS idx_timestamp ON clipboard_items(timestamp DESC);
-            ",
-        )
-        .map_err(|e| e.to_string())?;
+        }
 
         Ok(ClipboardState {
-            db: Some(conn),
+            db_path,
             image_dir,
             last_text: String::new(),
             last_image_hash: String::new(),
-            last_url_detected: String::new(),
-            image_write_cooldown_until: 0,
+            last_change_count: -1,
+            own_write_in_progress: false,
+            inserts_since_cleanup: 0,
         })
-    }
-
-    fn db(&self) -> Option<&Connection> {
-        self.db.as_ref()
     }
 }
 
-// Global state, wrapped in Arc<Mutex<>>
 pub type SharedClipboardState = Arc<Mutex<ClipboardState>>;
+
+fn open_clipboard_db(db_path: &Path) -> Result<Connection, String> {
+    let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
+    let _ = conn.execute_batch("PRAGMA journal_mode=WAL;");
+    Ok(conn)
+}
+
+fn with_db<T>(state: &SharedClipboardState, f: impl FnOnce(&Connection) -> T) -> Option<T> {
+    let db_path = {
+        let guard = state.lock().ok()?;
+        guard.db_path.clone()
+    };
+    let conn = open_clipboard_db(&db_path).ok()?;
+    Some(f(&conn))
+}
 
 // ──────────────────────────────────────────────────
 // Type detection
@@ -401,6 +428,40 @@ fn read_clipboard_html() -> Option<String> {
     None
 }
 
+#[cfg(target_os = "macos")]
+fn write_clipboard_html(html: &str, plain: &str) -> Result<(), String> {
+    use objc::runtime::{Object, BOOL, YES};
+    use objc::{class, msg_send, sel, sel_impl};
+
+    let pasteboard: *mut Object = unsafe { msg_send![class!(NSPasteboard), generalPasteboard] };
+    if pasteboard.is_null() {
+        return Err("NSPasteboard unavailable".into());
+    }
+
+    let _: u64 = unsafe { msg_send![pasteboard, clearContents] };
+
+    let html_type = nsstring("public.html").ok_or_else(|| "failed to create html type".to_string())?;
+    let plain_type =
+        nsstring("public.utf8-plain-text").ok_or_else(|| "failed to create plain type".to_string())?;
+    let html_ns = nsstring(html).ok_or_else(|| "failed to create html string".to_string())?;
+    let plain_ns = nsstring(plain).ok_or_else(|| "failed to create plain string".to_string())?;
+
+    let ok_html: BOOL = unsafe { msg_send![pasteboard, setString: html_ns forType: html_type] };
+    let ok_plain: BOOL = unsafe { msg_send![pasteboard, setString: plain_ns forType: plain_type] };
+
+    if ok_plain == YES {
+        let _ = ok_html;
+        Ok(())
+    } else {
+        Err("failed to set clipboard plain text".into())
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn write_clipboard_html(_html: &str, plain: &str) -> Result<(), String> {
+    set_clipboard_text(plain)
+}
+
 fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -414,6 +475,135 @@ fn image_hash(data: &[u8]) -> String {
     hex::encode(hasher.finalize())
 }
 
+/// Convert arboard RGBA image bytes to deterministic PNG, then return PNG bytes.
+fn encode_clipboard_image_png(img: &arboard::ImageData) -> Vec<u8> {
+    use image::{ImageBuffer, Rgba};
+    let rgba_bytes = img.bytes.clone().into_owned();
+    let buf: ImageBuffer<Rgba<u8>, _> =
+        ImageBuffer::from_raw(img.width as u32, img.height as u32, rgba_bytes).unwrap_or_default();
+    let mut png_bytes: Vec<u8> = Vec::new();
+    let _ = buf.write_to(
+        &mut std::io::Cursor::new(&mut png_bytes),
+        image::ImageFormat::Png,
+    );
+    png_bytes
+}
+
+fn hash_clipboard_image(cb: &mut Clipboard) -> Option<String> {
+    let img = cb.get_image().ok()?;
+    let png_data = encode_clipboard_image_png(&img);
+    if png_data.is_empty() {
+        None
+    } else {
+        Some(image_hash(&png_data))
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn pasteboard_change_count() -> Option<i64> {
+    use objc::runtime::Object;
+    use objc::{class, msg_send, sel, sel_impl};
+
+    let pasteboard: *mut Object = unsafe { msg_send![class!(NSPasteboard), generalPasteboard] };
+    if pasteboard.is_null() {
+        return None;
+    }
+    let count: isize = unsafe { msg_send![pasteboard, changeCount] };
+    Some(count as i64)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn pasteboard_change_count() -> Option<i64> {
+    None
+}
+
+fn thumb_path_for(image_path: &Path) -> PathBuf {
+    let stem = image_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("image");
+    image_path.with_file_name(format!("{stem}.thumb.png"))
+}
+
+fn resolve_thumb_path(image_path: &Option<String>) -> Option<String> {
+    let path = image_path.as_ref()?;
+    let thumb = thumb_path_for(Path::new(path));
+    if thumb.exists() {
+        Some(thumb.to_string_lossy().into_owned())
+    } else {
+        None
+    }
+}
+
+fn write_thumbnail_from_png(png_data: &[u8], image_path: &Path) -> Option<String> {
+    let img = image::load_from_memory(png_data).ok()?;
+    let thumb = img.thumbnail(THUMB_MAX_EDGE, THUMB_MAX_EDGE);
+    let thumb_path = thumb_path_for(image_path);
+    thumb
+        .save_with_format(&thumb_path, image::ImageFormat::Png)
+        .ok()?;
+    Some(thumb_path.to_string_lossy().into_owned())
+}
+
+fn remove_image_files(image_path: &str) {
+    let path = Path::new(image_path);
+    let _ = fs::remove_file(path);
+    let _ = fs::remove_file(thumb_path_for(path));
+}
+
+fn begin_own_write(state: &SharedClipboardState) {
+    if let Ok(mut guard) = state.lock() {
+        guard.own_write_in_progress = true;
+    }
+}
+
+fn finish_own_write(
+    state: &SharedClipboardState,
+    last_text: Option<String>,
+    last_image_hash: Option<String>,
+) {
+    if let Ok(mut guard) = state.lock() {
+        if let Some(c) = pasteboard_change_count() {
+            guard.last_change_count = c;
+        }
+        if let Some(t) = last_text {
+            guard.last_text = t;
+        }
+        if let Some(h) = last_image_hash {
+            guard.last_image_hash = h;
+        }
+        guard.own_write_in_progress = false;
+    }
+}
+
+fn abort_own_write(state: &SharedClipboardState) {
+    if let Ok(mut guard) = state.lock() {
+        guard.own_write_in_progress = false;
+    }
+}
+
+fn record_insert_and_maybe_cleanup(state: &SharedClipboardState, item: &ClipboardItem) {
+    let (db_path, image_dir, should_cleanup) = {
+        let mut guard = match state.lock() {
+            Ok(g) => g,
+            Err(_) => return,
+        };
+        guard.inserts_since_cleanup = guard.inserts_since_cleanup.saturating_add(1);
+        let should = guard.inserts_since_cleanup >= CLEANUP_EVERY_N_INSERTS;
+        if should {
+            guard.inserts_since_cleanup = 0;
+        }
+        (guard.db_path.clone(), guard.image_dir.clone(), should)
+    };
+
+    if let Ok(conn) = open_clipboard_db(&db_path) {
+        let _ = db_insert(&conn, item);
+        if should_cleanup {
+            db_cleanup(&conn, &image_dir);
+        }
+    }
+}
+
 // ──────────────────────────────────────────────────
 // DB helpers
 // ──────────────────────────────────────────────────
@@ -421,8 +611,8 @@ fn image_hash(data: &[u8]) -> String {
 fn db_insert(conn: &Connection, item: &ClipboardItem) -> Result<(), rusqlite::Error> {
     conn.execute(
         "INSERT OR REPLACE INTO clipboard_items
-         (id, type, content, preview, source_app, timestamp, image_path, language, color_value)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+         (id, type, content, preview, source_app, timestamp, image_path, language, color_value, html_content)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
         params![
             item.id,
             item.item_type,
@@ -433,36 +623,33 @@ fn db_insert(conn: &Connection, item: &ClipboardItem) -> Result<(), rusqlite::Er
             item.image_path,
             item.language,
             item.color_value,
+            item.html_content,
         ],
     )?;
     Ok(())
 }
 
 fn db_cleanup(conn: &Connection, image_dir: &PathBuf) {
-    const MAX_ITEMS: i64 = 10000;
     let count: i64 = conn
         .query_row("SELECT COUNT(*) FROM clipboard_items", [], |r| r.get(0))
         .unwrap_or(0);
 
     if count > MAX_ITEMS {
         let to_delete = count - MAX_ITEMS;
-        // Get image paths of oldest items
-        let mut stmt = conn
-            .prepare(
-                "SELECT image_path FROM clipboard_items WHERE image_path IS NOT NULL
-                 ORDER BY timestamp ASC LIMIT ?1",
-            )
-            .unwrap();
-        let paths: Vec<String> = stmt
-            .query_map([to_delete], |r| r.get(0))
-            .unwrap()
-            .flatten()
-            .collect();
+        let paths: Vec<String> = match conn.prepare(
+            "SELECT image_path FROM clipboard_items WHERE image_path IS NOT NULL
+             ORDER BY timestamp ASC LIMIT ?1",
+        ) {
+            Ok(mut stmt) => stmt
+                .query_map([to_delete], |r| r.get(0))
+                .map(|rows| rows.flatten().collect())
+                .unwrap_or_default(),
+            Err(_) => return,
+        };
 
         for p in paths {
-            let _ = fs::remove_file(&p);
-            // also try relative to image_dir
-            let _ = fs::remove_file(image_dir.join(&p));
+            remove_image_files(&p);
+            let _ = fs::remove_file(image_dir.join(Path::new(&p).file_name().unwrap_or_default()));
         }
 
         let _ = conn.execute(
@@ -474,6 +661,8 @@ fn db_cleanup(conn: &Connection, image_dir: &PathBuf) {
 }
 
 fn row_to_item(row: &rusqlite::Row<'_>) -> rusqlite::Result<ClipboardItem> {
+    let image_path: Option<String> = row.get(6)?;
+    let thumb_path = resolve_thumb_path(&image_path);
     Ok(ClipboardItem {
         id: row.get(0)?,
         item_type: row.get(1)?,
@@ -481,9 +670,12 @@ fn row_to_item(row: &rusqlite::Row<'_>) -> rusqlite::Result<ClipboardItem> {
         preview: row.get(3)?,
         source_app: row.get(4)?,
         timestamp: row.get::<_, i64>(5)? as u64,
-        image_path: row.get(6)?,
+        image_path,
+        thumb_path,
         language: row.get(7)?,
         color_value: row.get(8)?,
+        // List/search queries intentionally omit html_content to keep IPC payloads small.
+        html_content: None,
     })
 }
 
@@ -501,45 +693,44 @@ pub fn start_polling(app: AppHandle, state: SharedClipboardState) {
             }
         };
 
+        // Align changeCount so the current pasteboard is not treated as "new".
+        if let Some(count) = pasteboard_change_count() {
+            if let Ok(mut guard) = state.lock() {
+                guard.last_change_count = count;
+            }
+        }
+
         loop {
             std::thread::sleep(Duration::from_secs(1));
 
+            // Fast path: skip when pasteboard has not changed (macOS).
+            if let Some(count) = pasteboard_change_count() {
+                let mut guard = match state.lock() {
+                    Ok(g) => g,
+                    Err(_) => continue,
+                };
+                if guard.own_write_in_progress {
+                    continue;
+                }
+                if count == guard.last_change_count {
+                    continue;
+                }
+                guard.last_change_count = count;
+            } else {
+                let guard = match state.lock() {
+                    Ok(g) => g,
+                    Err(_) => continue,
+                };
+                if guard.own_write_in_progress {
+                    continue;
+                }
+            }
+
             // --- Try image first
             if let Ok(img) = cb.get_image() {
-                let rgba_bytes = img.bytes.clone().into_owned();
-
-                // Convert RGBA → PNG first, then hash the PNG bytes.
-                // PNG encoding is deterministic: same pixels always produce identical bytes,
-                // which means the hash is stable across repeated reads of the same clipboard
-                // image (raw RGBA bytes can vary on macOS due to alpha premultiplication).
-                let png_data: Vec<u8> = {
-                    use image::{ImageBuffer, Rgba};
-                    let buf: ImageBuffer<Rgba<u8>, _> =
-                        ImageBuffer::from_raw(img.width as u32, img.height as u32, rgba_bytes)
-                            .unwrap_or_default();
-                    let mut png_bytes: Vec<u8> = Vec::new();
-                    let _ = buf.write_to(
-                        &mut std::io::Cursor::new(&mut png_bytes),
-                        image::ImageFormat::Png,
-                    );
-                    png_bytes
-                };
+                let png_data = encode_clipboard_image_png(&img);
 
                 if !png_data.is_empty() {
-                    // Check cooldown first (set when we write an image back to clipboard).
-                    // Hash-based dedup is unreliable on macOS because arboard applies
-                    // alpha-premultiplication on read-back, producing different RGBA bytes.
-                    {
-                        let guard = match state.lock() {
-                            Ok(g) => g,
-                            Err(_) => continue,
-                        };
-                        if now_ms() < guard.image_write_cooldown_until {
-                            continue;
-                        }
-                    }
-
-                    // Hash PNG bytes for same-image dedup (e.g. user didn't copy anything new).
                     let hash = image_hash(&png_data);
                     {
                         let mut guard = match state.lock() {
@@ -553,16 +744,19 @@ pub fn start_polling(app: AppHandle, state: SharedClipboardState) {
                     }
 
                     let source_app = get_source_app();
-                    let guard = match state.lock() {
-                        Ok(g) => g,
-                        Err(_) => continue,
+                    let image_dir = {
+                        let guard = match state.lock() {
+                            Ok(g) => g,
+                            Err(_) => continue,
+                        };
+                        guard.image_dir.clone()
                     };
 
-                    // Save PNG file
                     let filename = format!("{}-{}.png", now_ms(), &Uuid::new_v4().to_string()[..8]);
-                    let filepath = guard.image_dir.join(&filename);
+                    let filepath = image_dir.join(&filename);
                     if fs::write(&filepath, &png_data).is_ok() {
                         let path_str = filepath.to_string_lossy().to_string();
+                        let thumb_path = write_thumbnail_from_png(&png_data, &filepath);
                         let item = ClipboardItem {
                             id: Uuid::new_v4().to_string(),
                             item_type: "image".to_string(),
@@ -571,17 +765,16 @@ pub fn start_polling(app: AppHandle, state: SharedClipboardState) {
                             source_app,
                             timestamp: now_ms(),
                             image_path: Some(path_str),
+                            thumb_path,
                             language: None,
                             color_value: None,
+                            html_content: None,
                         };
 
-                        if let Some(conn) = guard.db() {
-                            let _ = db_insert(conn, &item);
-                            db_cleanup(conn, &guard.image_dir.clone());
-                        }
+                        record_insert_and_maybe_cleanup(&state, &item);
                         let _ = app.emit("clipboard:newItem", &item);
                     }
-                    continue; // processed image, skip text check
+                    continue;
                 }
             }
 
@@ -604,11 +797,10 @@ pub fn start_polling(app: AppHandle, state: SharedClipboardState) {
 
                 let html = read_clipboard_html();
                 let detected = detect_type(&text);
-                let item_type = if detected.item_type == "text" && html.as_ref().is_some_and(|value| value.len() > text.len()) {
-                    "html"
-                } else {
-                    detected.item_type
-                };
+                let is_html = detected.item_type == "text"
+                    && html.as_ref().is_some_and(|value| value.len() > text.len());
+                let item_type = if is_html { "html" } else { detected.item_type };
+                let html_content = if is_html { html } else { None };
 
                 let item = ClipboardItem {
                     id: Uuid::new_v4().to_string(),
@@ -618,20 +810,17 @@ pub fn start_polling(app: AppHandle, state: SharedClipboardState) {
                     source_app: get_source_app(),
                     timestamp: now_ms(),
                     image_path: None,
+                    thumb_path: None,
                     language: detected.language.map(str::to_string),
                     color_value: detected.color_value,
+                    html_content,
                 };
 
-                let guard = match state.lock() {
-                    Ok(g) => g,
-                    Err(_) => continue,
-                };
-                if let Some(conn) = guard.db() {
-                    let _ = db_insert(conn, &item);
-                    db_cleanup(conn, &guard.image_dir.clone());
-                }
-                let _ = app.emit("clipboard:newItem", &item);
-                drop(guard);
+                let mut emit_item = item.clone();
+                emit_item.html_content = None;
+
+                record_insert_and_maybe_cleanup(&state, &item);
+                let _ = app.emit("clipboard:newItem", &emit_item);
                 maybe_emit_url_detected(&app, &state, &text);
             }
         }
@@ -653,35 +842,28 @@ pub struct ClipboardDailyStat {
 pub fn clipboard_get_daily_stats(
     state: tauri::State<SharedClipboardState>,
 ) -> Vec<ClipboardDailyStat> {
-    let guard = match state.lock() {
-        Ok(g) => g,
-        Err(_) => return vec![],
-    };
-    let conn = match guard.db() {
-        Some(c) => c,
-        None => return vec![],
-    };
+    with_db(&state, |conn| {
+        let mut stmt = match conn.prepare(
+            "SELECT date(datetime(timestamp / 1000, 'unixepoch', 'localtime')) AS day, COUNT(*)
+             FROM clipboard_items
+             WHERE day IS NOT NULL
+             GROUP BY day
+             ORDER BY day DESC",
+        ) {
+            Ok(s) => s,
+            Err(_) => return vec![],
+        };
 
-    let mut stmt = match conn.prepare(
-        "SELECT date(datetime(timestamp / 1000, 'unixepoch', 'localtime')) AS day, COUNT(*)
-         FROM clipboard_items
-         WHERE day IS NOT NULL
-         GROUP BY day
-         ORDER BY day DESC",
-    ) {
-        Ok(s) => s,
-        Err(_) => return vec![],
-    };
-
-    stmt.query_map([], |r| {
-        Ok(ClipboardDailyStat {
-            date: r.get(0)?,
-            count: r.get::<_, i64>(1)? as u64,
+        stmt.query_map([], |r| {
+            Ok(ClipboardDailyStat {
+                date: r.get(0)?,
+                count: r.get::<_, i64>(1)? as u64,
+            })
         })
+        .map(|rows| rows.flatten().collect())
+        .unwrap_or_default()
     })
-    .unwrap_or_else(|_| panic!("query daily stats failed"))
-    .flatten()
-    .collect()
+    .unwrap_or_default()
 }
 
 pub fn db_get_items(conn: &Connection, limit: i64, offset: i64, date_filter: Option<&str>) -> Vec<ClipboardItem> {
@@ -772,17 +954,10 @@ pub fn clipboard_get_items(
     offset: Option<i64>,
     date_filter: Option<String>,
 ) -> Vec<ClipboardItem> {
-    let guard = match state.lock() {
-        Ok(g) => g,
-        Err(_) => return vec![],
-    };
-    let conn = match guard.db() {
-        Some(c) => c,
-        None => return vec![],
-    };
     let limit = limit.unwrap_or(50);
     let offset = offset.unwrap_or(0);
-    db_get_items(&conn, limit, offset, date_filter.as_deref())
+    with_db(&state, |conn| db_get_items(conn, limit, offset, date_filter.as_deref()))
+        .unwrap_or_default()
 }
 
 #[tauri::command]
@@ -792,59 +967,14 @@ pub fn clipboard_search_items(
     limit: Option<i64>,
     date_filter: Option<String>,
 ) -> Vec<ClipboardItem> {
-    let guard = match state.lock() {
-        Ok(g) => g,
-        Err(_) => return vec![],
-    };
-    let conn = match guard.db() {
-        Some(c) => c,
-        None => return vec![],
-    };
-
     if query.trim().is_empty() {
-        drop(guard);
         return vec![];
     }
-
     let limit = limit.unwrap_or(50);
-    let pattern = format!("%{}%", query);
-
-    if let Some(date) = date_filter.filter(|d| !d.trim().is_empty()) {
-        let mut stmt = match conn.prepare(
-            "SELECT id, type,
-                    CASE WHEN type = 'image' THEN content ELSE substr(content, 1, 1200) END AS content,
-                    preview, source_app, timestamp, image_path, language, color_value
-             FROM clipboard_items
-             WHERE (content LIKE ?1 OR preview LIKE ?2 OR source_app LIKE ?3)
-               AND date(datetime(timestamp / 1000, 'unixepoch', 'localtime')) = ?4
-             ORDER BY timestamp DESC LIMIT ?5",
-        ) {
-            Ok(s) => s,
-            Err(_) => return vec![],
-        };
-
-        stmt.query_map(params![pattern, pattern, pattern, date, limit], row_to_item)
-            .unwrap_or_else(|_| panic!("query failed"))
-            .flatten()
-            .collect()
-    } else {
-        let mut stmt = match conn.prepare(
-            "SELECT id, type,
-                    CASE WHEN type = 'image' THEN content ELSE substr(content, 1, 1200) END AS content,
-                    preview, source_app, timestamp, image_path, language, color_value
-             FROM clipboard_items
-             WHERE content LIKE ?1 OR preview LIKE ?2 OR source_app LIKE ?3
-             ORDER BY timestamp DESC LIMIT ?4",
-        ) {
-            Ok(s) => s,
-            Err(_) => return vec![],
-        };
-
-        stmt.query_map(params![pattern, pattern, pattern, limit], row_to_item)
-            .unwrap_or_else(|_| panic!("query failed"))
-            .flatten()
-            .collect()
-    }
+    with_db(&state, |conn| {
+        db_search_items(conn, &query, limit, date_filter.as_deref())
+    })
+    .unwrap_or_default()
 }
 
 #[tauri::command]
@@ -852,53 +982,44 @@ pub fn clipboard_delete_item(
     state: tauri::State<SharedClipboardState>,
     id: String,
 ) -> bool {
-    let guard = match state.lock() {
-        Ok(g) => g,
-        Err(_) => return false,
-    };
-    let conn = match guard.db() {
-        Some(c) => c,
-        None => return false,
-    };
+    with_db(&state, |conn| {
+        let image_path: Option<String> = conn
+            .query_row(
+                "SELECT image_path FROM clipboard_items WHERE id = ?1",
+                params![id],
+                |r| r.get(0),
+            )
+            .unwrap_or(None);
 
-    // Delete associated image if any
-    let image_path: Option<String> = conn
-        .query_row(
-            "SELECT image_path FROM clipboard_items WHERE id = ?1",
-            params![id],
-            |r| r.get(0),
-        )
-        .unwrap_or(None);
+        if let Some(p) = image_path {
+            remove_image_files(&p);
+        }
 
-    if let Some(p) = image_path {
-        let _ = fs::remove_file(&p);
-    }
-
-    conn.execute("DELETE FROM clipboard_items WHERE id = ?1", params![id])
-        .is_ok()
+        conn.execute("DELETE FROM clipboard_items WHERE id = ?1", params![id])
+            .is_ok()
+    })
+    .unwrap_or(false)
 }
 
 #[tauri::command]
 pub fn clipboard_clear_all(state: tauri::State<SharedClipboardState>) -> bool {
-    let guard = match state.lock() {
-        Ok(g) => g,
-        Err(_) => return false,
-    };
-    let conn = match guard.db() {
-        Some(c) => c,
-        None => return false,
+    let image_dir = {
+        let guard = match state.lock() {
+            Ok(g) => g,
+            Err(_) => return false,
+        };
+        guard.image_dir.clone()
     };
 
-    // Delete all image files
-    if guard.image_dir.exists() {
-        if let Ok(entries) = fs::read_dir(&guard.image_dir) {
+    if image_dir.exists() {
+        if let Ok(entries) = fs::read_dir(&image_dir) {
             for entry in entries.flatten() {
                 let _ = fs::remove_file(entry.path());
             }
         }
     }
 
-    conn.execute("DELETE FROM clipboard_items", []).is_ok()
+    with_db(&state, |conn| conn.execute("DELETE FROM clipboard_items", []).is_ok()).unwrap_or(false)
 }
 
 #[tauri::command]
@@ -906,33 +1027,29 @@ pub fn clipboard_write_to_clipboard(
     state: tauri::State<SharedClipboardState>,
     id: String,
 ) -> bool {
-    // First look up the item
-    let (item_type, content, image_path) = {
-        let guard = match state.lock() {
-            Ok(g) => g,
-            Err(_) => return false,
-        };
-        let conn = match guard.db() {
-            Some(c) => c,
-            None => return false,
-        };
-        let result: Option<(String, String, Option<String>)> = conn
-            .query_row(
-                "SELECT type, content, image_path FROM clipboard_items WHERE id = ?1",
-                params![id],
-                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
-            )
-            .ok();
-        match result {
-            Some(r) => r,
-            None => return false,
-        }
+    let result: Option<(String, String, Option<String>, Option<String>)> = with_db(&state, |conn| {
+        conn.query_row(
+            "SELECT type, content, image_path, html_content FROM clipboard_items WHERE id = ?1",
+            params![id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )
+        .ok()
+    })
+    .flatten();
+
+    let (item_type, content, image_path, html_content) = match result {
+        Some(r) => r,
+        None => return false,
     };
 
-    // Write outside of the mutex lock to avoid deadlock with polling thread
+    begin_own_write(&state);
+
     let mut cb = match Clipboard::new() {
         Ok(c) => c,
-        Err(_) => return false,
+        Err(_) => {
+            abort_own_write(&state);
+            return false;
+        }
     };
 
     if item_type == "image" {
@@ -943,79 +1060,75 @@ pub fn clipboard_write_to_clipboard(
                     let (w, h) = rgba.dimensions();
                     let raw_bytes = rgba.into_raw();
 
-                    // Set a 6-second cooldown BEFORE writing to clipboard.
-                    // The polling thread checks this and skips image recording during
-                    // the cooldown window.  Hash-based dedup is not reliable on macOS
-                    // because arboard applies alpha-premultiplication on read-back,
-                    // making the round-trip hash unpredictable.
-                    if let Ok(mut guard) = state.lock() {
-                        guard.image_write_cooldown_until = now_ms() + 6_000;
-                    }
-
                     let img_data = arboard::ImageData {
                         width: w as usize,
                         height: h as usize,
                         bytes: std::borrow::Cow::Owned(raw_bytes),
                     };
                     if cb.set_image(img_data).is_ok() {
+                        let hash = hash_clipboard_image(&mut cb);
+                        finish_own_write(&state, None, hash);
                         return true;
                     }
                 }
             }
         }
+        abort_own_write(&state);
         return false;
     }
 
-    if cb.set_text(&content).is_ok() {
-        if let Ok(mut guard) = state.lock() {
-            guard.last_text = content;
-        }
-        return true;
+    let write_ok = if let Some(html) = html_content.filter(|h| !h.is_empty()) {
+        write_clipboard_html(&html, &content).is_ok()
+    } else {
+        cb.set_text(&content).is_ok()
+    };
+
+    if write_ok {
+        finish_own_write(&state, Some(content), None);
+        true
+    } else {
+        abort_own_write(&state);
+        false
     }
-    false
 }
 
 #[tauri::command]
-pub fn clipboard_get_stats(
-    state: tauri::State<SharedClipboardState>,
-) -> ClipboardStats {
-    let guard = match state.lock() {
-        Ok(g) => g,
-        Err(_) => return ClipboardStats { total: 0, by_type: Default::default() },
-    };
-    let conn = match guard.db() {
-        Some(c) => c,
-        None => return ClipboardStats { total: 0, by_type: Default::default() },
-    };
+pub fn clipboard_get_stats(state: tauri::State<SharedClipboardState>) -> ClipboardStats {
+    with_db(&state, |conn| {
+        let total: i64 = conn
+            .query_row("SELECT COUNT(*) FROM clipboard_items", [], |r| r.get(0))
+            .unwrap_or(0);
 
-    let total: i64 = conn
-        .query_row("SELECT COUNT(*) FROM clipboard_items", [], |r| r.get(0))
-        .unwrap_or(0);
+        let mut stmt = match conn.prepare("SELECT type, COUNT(*) FROM clipboard_items GROUP BY type")
+        {
+            Ok(s) => s,
+            Err(_) => {
+                return ClipboardStats {
+                    total: total as u64,
+                    by_type: Default::default(),
+                };
+            }
+        };
 
-    let mut stmt = conn
-        .prepare("SELECT type, COUNT(*) FROM clipboard_items GROUP BY type")
-        .unwrap();
+        let by_type: std::collections::HashMap<String, u64> = stmt
+            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)? as u64)))
+            .map(|rows| rows.flatten().collect())
+            .unwrap_or_default();
 
-    let by_type: std::collections::HashMap<String, u64> = stmt
-        .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)? as u64)))
-        .unwrap()
-        .flatten()
-        .collect();
-
-    ClipboardStats {
-        total: total as u64,
-        by_type,
-    }
+        ClipboardStats {
+            total: total as u64,
+            by_type,
+        }
+    })
+    .unwrap_or(ClipboardStats {
+        total: 0,
+        by_type: Default::default(),
+    })
 }
-
-// ──────────────────────────────────────────────────
-// Public initialiser called from lib.rs setup
-// ──────────────────────────────────────────────────
 
 #[tauri::command]
 pub fn clipboard_get_image_data(image_path: String) -> Result<String, String> {
-    // Images are already stored as PNG files — no decode/resize/re-encode needed.
-    // Just read raw bytes and base64-encode them for the WebView.
+    // Fallback for callers that still need a data URL (prefer asset protocol + thumb_path).
     let bytes = std::fs::read(&image_path).map_err(|e| format!("Failed to read image: {e}"))?;
     use base64::Engine;
     let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
@@ -1056,13 +1169,14 @@ pub fn clipboard_write_image_data(
     let (w, h) = rgba.dimensions();
     let raw_bytes = rgba.into_raw();
 
-    if let Ok(mut guard) = state.lock() {
-        guard.image_write_cooldown_until = now_ms() + 6_000;
-    }
+    begin_own_write(&state);
 
     let mut cb = match Clipboard::new() {
         Ok(c) => c,
-        Err(_) => return false,
+        Err(_) => {
+            abort_own_write(&state);
+            return false;
+        }
     };
 
     let img_data = arboard::ImageData {
@@ -1071,7 +1185,14 @@ pub fn clipboard_write_image_data(
         bytes: std::borrow::Cow::Owned(raw_bytes),
     };
 
-    cb.set_image(img_data).is_ok()
+    if cb.set_image(img_data).is_ok() {
+        let hash = hash_clipboard_image(&mut cb);
+        finish_own_write(&state, None, hash);
+        true
+    } else {
+        abort_own_write(&state);
+        false
+    }
 }
 
 pub fn init(app: &AppHandle) -> SharedClipboardState {
@@ -1084,11 +1205,17 @@ pub fn init(app: &AppHandle) -> SharedClipboardState {
         ClipboardState::new(&data_dir).expect("Failed to initialise clipboard DB"),
     ));
 
-    // Seed last_text from current clipboard so we don't record on startup
+    // Seed last_* and changeCount so we don't re-record on startup
     if let Ok(mut cb) = Clipboard::new() {
-        if let Ok(text) = cb.get_text() {
-            if let Ok(mut guard) = state.lock() {
+        if let Ok(mut guard) = state.lock() {
+            if let Ok(text) = cb.get_text() {
                 guard.last_text = text;
+            }
+            if let Some(hash) = hash_clipboard_image(&mut cb) {
+                guard.last_image_hash = hash;
+            }
+            if let Some(count) = pasteboard_change_count() {
+                guard.last_change_count = count;
             }
         }
     }

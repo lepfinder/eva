@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react'
-import { invoke } from '@tauri-apps/api/core'
+import { invoke, convertFileSrc } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import {
@@ -53,6 +53,7 @@ interface ClipboardItem {
     sourceApp: string
     timestamp: number
     imagePath?: string
+    thumbPath?: string
     language?: string
     colorValue?: string
 }
@@ -79,35 +80,29 @@ function formatRelativeTime(timestamp: number): string {
     return `${hours}小时前`
 }
 
-// 缓存图片 Base64
-const imageCache = new Map<string, string>()
-
-function HubImageThumbnail({ imagePath }: { imagePath: string }) {
-    const [dataUrl, setDataUrl] = useState<string>(imageCache.get(imagePath) || '')
+function HubImageThumbnail({ imagePath, thumbPath }: { imagePath: string; thumbPath?: string }) {
+    const [src, setSrc] = useState(() => convertFileSrc(thumbPath || imagePath))
+    const [failedAsset, setFailedAsset] = useState(false)
 
     useEffect(() => {
-        if (!imagePath) return
-        if (imageCache.has(imagePath)) {
-            setDataUrl(imageCache.get(imagePath)!)
-            return
-        }
+        setSrc(convertFileSrc(thumbPath || imagePath))
+        setFailedAsset(false)
+    }, [imagePath, thumbPath])
 
-        let isCancelled = false
+    useEffect(() => {
+        if (!failedAsset) return
+        let cancelled = false
         invoke<string>('clipboard_get_image_data', { imagePath })
             .then((res) => {
-                if (!isCancelled && res) {
-                    imageCache.set(imagePath, res)
-                    setDataUrl(res)
-                }
+                if (!cancelled && res) setSrc(res)
             })
             .catch(() => {})
-
         return () => {
-            isCancelled = true
+            cancelled = true
         }
-    }, [imagePath])
+    }, [failedAsset, imagePath])
 
-    if (!dataUrl) {
+    if (!src) {
         return (
             <div className="w-9 h-9 rounded-md bg-zinc-800 flex items-center justify-center shrink-0 border border-zinc-700/60">
                 <Image className="h-4 w-4 text-zinc-500 animate-pulse" />
@@ -117,7 +112,14 @@ function HubImageThumbnail({ imagePath }: { imagePath: string }) {
 
     return (
         <div className="w-9 h-9 rounded-md overflow-hidden shrink-0 border border-zinc-700/80 bg-zinc-950 shadow-xs">
-            <img src={dataUrl} alt="预览" className="w-full h-full object-cover" />
+            <img
+                src={src}
+                alt="预览"
+                className="w-full h-full object-cover"
+                onError={() => {
+                    if (!failedAsset) setFailedAsset(true)
+                }}
+            />
         </div>
     )
 }
@@ -216,14 +218,20 @@ export function QuickHubView(): React.ReactElement {
         }
     }, [])
 
+    // 端口列表与冲突检测状态（需在 handleCopyItem 之前声明，供失败提示使用）
+    const [ports, setPorts] = useState<ListeningPort[]>([])
+    const [statusMessage, setStatusMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null)
+
     // 复制剪贴板条目 (通过后端真实写回系统剪贴板，支持图片二进制解码与富文本)
+    // 失败时只提示，不用列表里已截断的 content 兜底写回
     const handleCopyItem = useCallback(async (item: ClipboardItem) => {
         try {
             setCopiedId(item.id)
-            if (window.api?.clipboard?.writeToClipboard) {
-                await window.api.clipboard.writeToClipboard(item.id)
-            } else {
-                await invoke('clipboard_write_to_clipboard', { id: item.id })
+            const ok = window.api?.clipboard?.writeToClipboard
+                ? await window.api.clipboard.writeToClipboard(item.id)
+                : await invoke<boolean>('clipboard_write_to_clipboard', { id: item.id })
+            if (!ok) {
+                throw new Error('clipboard write returned false')
             }
             // 短暂保留打勾反馈，160ms 后优雅隐去窗口
             setTimeout(() => {
@@ -232,19 +240,11 @@ export function QuickHubView(): React.ReactElement {
             }, 160)
         } catch (e) {
             console.error('Failed to copy item via backend:', e)
-            try {
-                await navigator.clipboard.writeText(item.content)
-                setTimeout(() => {
-                    handleClose()
-                    setCopiedId(null)
-                }, 160)
-            } catch {}
+            setCopiedId(null)
+            setStatusMessage({ text: '写回剪贴板失败', type: 'error' })
+            setTimeout(() => setStatusMessage(null), 2400)
         }
     }, [handleClose])
-
-    // 端口列表与冲突检测状态
-    const [ports, setPorts] = useState<ListeningPort[]>([])
-    const [statusMessage, setStatusMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null)
 
     const fetchPorts = useCallback(async () => {
         try {
@@ -632,7 +632,7 @@ export function QuickHubView(): React.ReactElement {
 
                                         {/* 类型图标/图片缩略图 */}
                                         {item.type === 'image' && item.imagePath ? (
-                                            <HubImageThumbnail imagePath={item.imagePath} />
+                                            <HubImageThumbnail imagePath={item.imagePath} thumbPath={item.thumbPath} />
                                         ) : item.type === 'code' ? (
                                             <div className="w-8 h-8 rounded-lg bg-zinc-800/90 border border-zinc-700/60 flex items-center justify-center shrink-0 text-cyan-400">
                                                 <Code className="h-4 w-4" />

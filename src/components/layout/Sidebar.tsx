@@ -69,7 +69,9 @@ export function Sidebar({ activeNav, onNavChange }: SidebarProps): React.ReactEl
         <div
           className="drag-region h-12 shrink-0"
           data-tauri-drag-region
-          onMouseDown={() => getCurrentWindow().startDragging()}
+          onMouseDown={() => {
+            void getCurrentWindow().startDragging().catch(() => {})
+          }}
         />
         <div className={cn("flex items-center px-4 pb-3", collapsed ? "justify-center" : "justify-between")}>
           {!collapsed && (

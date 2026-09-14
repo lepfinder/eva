@@ -209,7 +209,9 @@ export function MainLayoutContents(): React.ReactElement {
         <div
           className="drag-region h-12 shrink-0 border-b bg-background"
           data-tauri-drag-region
-          onMouseDown={() => getCurrentWindow().startDragging()}
+          onMouseDown={() => {
+            void getCurrentWindow().startDragging().catch(() => {})
+          }}
         />
         {isFullHeightPage ? (
           // 导航页面/工具箱：完全填满，自己管理滚动

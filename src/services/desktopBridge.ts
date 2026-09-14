@@ -258,6 +258,16 @@ const servicesApi: Record<string, AnyFn> = {
   openInIde: (path: string, ide: string) => invoke('service_open_in_ide', { path, ide }),
   detectIdes: () => invoke('service_detect_ides'),
   tailLog: (id: string, lines?: number) => invoke('service_tail_log', { id, lines: lines ?? null }),
+  pickFolder: () => invoke('service_pick_folder'),
+  scanProject: (projectDir: string) => invoke('service_scan_project', { projectDir }),
+  probeCandidate: (definition: unknown, timeoutSecs?: number, attempt?: number) =>
+    invoke('service_probe_candidate', {
+      definition,
+      timeoutSecs: timeoutSecs ?? null,
+      attempt: attempt ?? null,
+    }),
+  upsert: (definition: unknown) => invoke('service_upsert', { definition }),
+  remove: (id: string) => invoke('service_remove', { id }),
 }
 
 // Global Hotkeys
