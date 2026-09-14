@@ -1023,11 +1023,18 @@ pub fn clipboard_clear_all(state: tauri::State<SharedClipboardState>) -> bool {
 }
 
 #[tauri::command]
-pub fn clipboard_write_to_clipboard(
-    state: tauri::State<SharedClipboardState>,
+pub async fn clipboard_write_to_clipboard(
+    state: tauri::State<'_, SharedClipboardState>,
     id: String,
-) -> bool {
-    let result: Option<(String, String, Option<String>, Option<String>)> = with_db(&state, |conn| {
+) -> Result<bool, String> {
+    let state = Arc::clone(&state);
+    tauri::async_runtime::spawn_blocking(move || clipboard_write_to_clipboard_sync(&state, &id))
+        .await
+        .map_err(|e| format!("clipboard write interrupted: {e}"))
+}
+
+fn clipboard_write_to_clipboard_sync(state: &SharedClipboardState, id: &str) -> bool {
+    let result: Option<(String, String, Option<String>, Option<String>)> = with_db(state, |conn| {
         conn.query_row(
             "SELECT type, content, image_path, html_content FROM clipboard_items WHERE id = ?1",
             params![id],
@@ -1042,38 +1049,38 @@ pub fn clipboard_write_to_clipboard(
         None => return false,
     };
 
-    begin_own_write(&state);
+    begin_own_write(state);
 
     let mut cb = match Clipboard::new() {
         Ok(c) => c,
         Err(_) => {
-            abort_own_write(&state);
+            abort_own_write(state);
             return false;
         }
     };
 
     if item_type == "image" {
         if let Some(p) = image_path {
-            if let Ok(data) = fs::read(&p) {
-                if let Ok(img) = image::load_from_memory(&data) {
-                    let rgba = img.to_rgba8();
-                    let (w, h) = rgba.dimensions();
-                    let raw_bytes = rgba.into_raw();
+            let path = Path::new(&p);
+            // Hash file bytes directly — avoid re-reading pasteboard + re-encoding PNG.
+            let file_hash = fs::read(path).ok().map(|b| image_hash(&b));
+            if let Ok(img) = image::open(path) {
+                let rgba = img.to_rgba8();
+                let (w, h) = rgba.dimensions();
+                let raw_bytes = rgba.into_raw();
 
-                    let img_data = arboard::ImageData {
-                        width: w as usize,
-                        height: h as usize,
-                        bytes: std::borrow::Cow::Owned(raw_bytes),
-                    };
-                    if cb.set_image(img_data).is_ok() {
-                        let hash = hash_clipboard_image(&mut cb);
-                        finish_own_write(&state, None, hash);
-                        return true;
-                    }
+                let img_data = arboard::ImageData {
+                    width: w as usize,
+                    height: h as usize,
+                    bytes: std::borrow::Cow::Owned(raw_bytes),
+                };
+                if cb.set_image(img_data).is_ok() {
+                    finish_own_write(state, None, file_hash);
+                    return true;
                 }
             }
         }
-        abort_own_write(&state);
+        abort_own_write(state);
         return false;
     }
 
@@ -1084,10 +1091,10 @@ pub fn clipboard_write_to_clipboard(
     };
 
     if write_ok {
-        finish_own_write(&state, Some(content), None);
+        finish_own_write(state, Some(content), None);
         true
     } else {
-        abort_own_write(&state);
+        abort_own_write(state);
         false
     }
 }

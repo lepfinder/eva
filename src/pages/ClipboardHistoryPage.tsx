@@ -1,19 +1,25 @@
 /**
  * 剪贴板历史工具组件
  */
-import { useState, useEffect, useCallback, useRef } from 'react'
-import { flushSync } from 'react-dom'
+import { useState, useEffect, useCallback, useRef, useMemo, memo } from 'react'
 import { invoke, convertFileSrc } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import {
     Copy, Check, Trash2, Search, Clock, Image, Code, Type,
     Palette, FileText, RefreshCw, MoreVertical, X, Loader2,
     Calendar, CalendarDays, PanelLeftClose, PanelLeft,
-    Layers, FilterX
+    Layers, FilterX, ZoomIn
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
+import {
+    Dialog,
+    DialogContent,
+    DialogDescription,
+    DialogHeader,
+    DialogTitle,
+} from '@/components/ui/dialog'
 import {
     DropdownMenu,
     DropdownMenuContent,
@@ -129,16 +135,27 @@ function formatDateLabel(dateStr: string) {
     }
 }
 
-// 列表优先走 asset protocol（缩略图），失败时再回退 base64
-function ClipboardImage({ imagePath, thumbPath }: { imagePath: string; thumbPath?: string }) {
-    const assetSrc = convertFileSrc(thumbPath || imagePath)
+// 列表优先走 asset protocol（缩略图），失败时再回退 base64；预览可强制原图
+function ClipboardImage({
+    imagePath,
+    thumbPath,
+    preferFull = false,
+    className,
+}: {
+    imagePath: string
+    thumbPath?: string
+    preferFull?: boolean
+    className?: string
+}) {
+    const displayPath = preferFull ? imagePath : (thumbPath || imagePath)
+    const assetSrc = convertFileSrc(displayPath)
     const [src, setSrc] = useState(assetSrc)
     const [failedAsset, setFailedAsset] = useState(false)
 
     useEffect(() => {
-        setSrc(convertFileSrc(thumbPath || imagePath))
+        setSrc(convertFileSrc(preferFull ? imagePath : (thumbPath || imagePath)))
         setFailedAsset(false)
-    }, [imagePath, thumbPath])
+    }, [imagePath, thumbPath, preferFull])
 
     useEffect(() => {
         if (!failedAsset) return
@@ -169,12 +186,72 @@ function ClipboardImage({ imagePath, thumbPath }: { imagePath: string; thumbPath
         <img
             src={src}
             alt="Clipboard image"
-            className="w-full h-auto max-h-48 object-contain rounded-lg bg-zinc-100 dark:bg-zinc-800"
+            className={
+                className ??
+                'w-full h-auto max-h-48 object-contain rounded-lg bg-zinc-100 dark:bg-zinc-800'
+            }
             loading="lazy"
             onError={() => {
                 if (!failedAsset) setFailedAsset(true)
             }}
         />
+    )
+}
+
+function ImagePreviewDialog({
+    item,
+    open,
+    onOpenChange,
+    onCopy,
+}: {
+    item: ClipboardItem | null
+    open: boolean
+    onOpenChange: (open: boolean) => void
+    onCopy: (id: string) => void
+}) {
+    if (!item?.imagePath) return null
+
+    return (
+        <Dialog open={open} onOpenChange={onOpenChange}>
+            <DialogContent className="max-w-[min(96vw,1100px)] w-full gap-3 overflow-hidden p-4 sm:rounded-xl">
+                <DialogHeader className="pr-8 text-left">
+                    <DialogTitle className="text-base">图片预览</DialogTitle>
+                    <DialogDescription className="text-xs">
+                        {formatTime(item.timestamp)}
+                        {item.sourceApp ? ` · ${item.sourceApp}` : ''}
+                        {' · 原图预览'}
+                    </DialogDescription>
+                </DialogHeader>
+                <div className="flex max-h-[min(78vh,820px)] items-center justify-center overflow-auto rounded-lg bg-zinc-100 dark:bg-zinc-900/80 p-2">
+                    <ClipboardImage
+                        imagePath={item.imagePath}
+                        preferFull
+                        className="max-h-[min(76vh,800px)] w-auto max-w-full object-contain"
+                    />
+                </div>
+                <div className="flex justify-end gap-2">
+                    <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => onOpenChange(false)}
+                    >
+                        关闭
+                    </Button>
+                    <Button
+                        type="button"
+                        size="sm"
+                        onClick={() => {
+                            onCopy(item.id)
+                            onOpenChange(false)
+                        }}
+                    >
+                        <Copy className="mr-1.5 h-3.5 w-3.5" />
+                        复制
+                    </Button>
+                </div>
+            </DialogContent>
+        </Dialog>
     )
 }
 
@@ -219,22 +296,30 @@ function ColorCard({ colorValue }: { colorValue: string }) {
 }
 
 // 单个剪贴板条目卡片
-function ClipboardCard({
+const ClipboardCard = memo(function ClipboardCard({
     item,
     onCopy,
     onDelete,
+    onPreview,
     copied,
     copying
 }: {
     item: ClipboardItem
     onCopy: (id: string) => void
     onDelete: (id: string) => void
+    onPreview?: (item: ClipboardItem) => void
     copied: boolean
     copying: boolean
 }) {
     return (
         <div
-            className="group relative bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 p-4 hover:shadow-lg hover:border-blue-500/50 transition-all cursor-pointer"
+            className={[
+                'group relative bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 p-4',
+                'hover:shadow-lg hover:border-blue-500/50 transition-[box-shadow,border-color,transform] duration-150 cursor-pointer',
+                '[content-visibility:auto] [contain-intrinsic-size:auto_220px]',
+                copying ? 'scale-[0.99] border-blue-500/60' : '',
+                copied ? 'border-emerald-500/50' : '',
+            ].join(' ')}
             onClick={() => onCopy(item.id)}
         >
             {/* 头部信息 */}
@@ -248,6 +333,20 @@ function ClipboardCard({
                 </div>
 
                 <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                    {item.type === 'image' && item.imagePath && onPreview && (
+                        <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-7 w-7"
+                            title="放大查看"
+                            onClick={(e) => {
+                                e.stopPropagation()
+                                onPreview(item)
+                            }}
+                        >
+                            <ZoomIn className="h-4 w-4" />
+                        </Button>
+                    )}
                     <DropdownMenu>
                         <DropdownMenuTrigger asChild>
                             <Button variant="ghost" size="icon" className="h-7 w-7" onClick={e => e.stopPropagation()}>
@@ -255,6 +354,17 @@ function ClipboardCard({
                             </Button>
                         </DropdownMenuTrigger>
                         <DropdownMenuContent align="end">
+                            {item.type === 'image' && item.imagePath && onPreview && (
+                                <DropdownMenuItem
+                                    onClick={(e) => {
+                                        e.stopPropagation()
+                                        onPreview(item)
+                                    }}
+                                >
+                                    <ZoomIn className="h-4 w-4 mr-2" />
+                                    放大查看
+                                </DropdownMenuItem>
+                            )}
                             <DropdownMenuItem onClick={(e) => { e.stopPropagation(); onDelete(item.id) }} className="text-red-500">
                                 <Trash2 className="h-4 w-4 mr-2" />
                                 删除
@@ -298,25 +408,35 @@ function ClipboardCard({
                 </div>
             </div>
 
-            {/* 复制中 / 复制成功提示 */}
-            {copying && (
-                <div className="absolute inset-0 flex items-center justify-center bg-zinc-800/80 rounded-xl text-white font-medium">
-                    <Loader2 className="h-5 w-5 mr-2 animate-spin" />
-                    复制中…
-                </div>
-            )}
-            {!copying && copied && (
-                <div className="absolute inset-0 flex items-center justify-center bg-green-500/90 rounded-xl text-white font-medium">
-                    <Check className="h-5 w-5 mr-2" />
-                    已复制
+            {/* 复制中 / 复制成功 — 立即可见的中间态 */}
+            {(copying || copied) && (
+                <div
+                    className={[
+                        'absolute inset-0 z-10 flex items-center justify-center rounded-xl text-white font-medium',
+                        'animate-in fade-in zoom-in-95 duration-150',
+                        copying ? 'bg-zinc-900/75 backdrop-blur-[2px]' : 'bg-emerald-500/90',
+                    ].join(' ')}
+                >
+                    {copying ? (
+                        <>
+                            <Loader2 className="h-5 w-5 mr-2 animate-spin" />
+                            复制中…
+                        </>
+                    ) : (
+                        <>
+                            <Check className="h-5 w-5 mr-2" />
+                            已复制
+                        </>
+                    )}
                 </div>
             )}
         </div>
     )
-}
+})
 
 export function ClipboardHistoryPage() {
     const [items, setItems] = useState<ClipboardItem[]>([])
+    const [previewItem, setPreviewItem] = useState<ClipboardItem | null>(null)
     const [loading, setLoading] = useState(true)
     const [searchQuery, setSearchQuery] = useState('')
     const [copiedId, setCopiedId] = useState<string | null>(null)
@@ -446,13 +566,10 @@ export function ClipboardHistoryPage() {
         return () => observer.disconnect()
     }, [hasMore, loading, searchQuery, loadItems])
 
-    // 复制操作
-    const handleCopy = async (id: string) => {
-        flushSync(() => {
-            setCopyingId(id)
-            setCopiedId(null)
-        })
-
+    // 复制操作：先亮「复制中」，再异步写系统剪贴板（不阻塞 UI 线程）
+    const handleCopy = useCallback(async (id: string) => {
+        setCopyingId(id)
+        setCopiedId(null)
         try {
             const ok = await window.api.clipboard.writeToClipboard(id)
             if (!ok) {
@@ -460,24 +577,29 @@ export function ClipboardHistoryPage() {
             }
             setCopyingId(null)
             setCopiedId(id)
-            setTimeout(() => setCopiedId(prev => prev === id ? null : prev), 1500)
+            setTimeout(() => setCopiedId(prev => (prev === id ? null : prev)), 1200)
         } catch (error) {
             setCopyingId(null)
             console.error('Failed to copy:', error)
         }
-    }
+    }, [])
 
     // 删除操作
-    const handleDelete = async (id: string) => {
+    const handleDelete = useCallback(async (id: string) => {
         try {
             await window.api.clipboard.deleteItem(id)
             setItems(prev => prev.filter(item => item.id !== id))
-            loadStats()
-            loadDailyStats()
+            setPreviewItem(prev => (prev?.id === id ? null : prev))
+            void loadStats()
+            void loadDailyStats()
         } catch (error) {
             console.error('Failed to delete:', error)
         }
-    }
+    }, [loadStats, loadDailyStats])
+
+    const handlePreview = useCallback((item: ClipboardItem) => {
+        setPreviewItem(item)
+    }, [])
 
     // 清空所有
     const handleClearAll = async () => {
@@ -500,9 +622,10 @@ export function ClipboardHistoryPage() {
     }
 
     // 前端类型过滤
-    const filteredItems = selectedType
-        ? items.filter(item => item.type === selectedType)
-        : items
+    const filteredItems = useMemo(
+        () => (selectedType ? items.filter(item => item.type === selectedType) : items),
+        [items, selectedType]
+    )
 
     const selectedDateObj = selectedDate ? formatDateLabel(selectedDate) : null
 
@@ -788,6 +911,7 @@ export function ClipboardHistoryPage() {
                                             item={item}
                                             onCopy={handleCopy}
                                             onDelete={handleDelete}
+                                            onPreview={handlePreview}
                                             copied={copiedId === item.id}
                                             copying={copyingId === item.id}
                                         />
@@ -806,6 +930,15 @@ export function ClipboardHistoryPage() {
                     )}
                 </div>
             </div>
+
+            <ImagePreviewDialog
+                item={previewItem}
+                open={!!previewItem}
+                onOpenChange={(open) => {
+                    if (!open) setPreviewItem(null)
+                }}
+                onCopy={handleCopy}
+            />
         </div>
     )
 }
