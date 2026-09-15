@@ -1,21 +1,21 @@
 import React, { useState, useEffect, cloneElement } from 'react'
-import { tools, ToolType } from '@/pages/ToolboxPage'
+import { allTools, type ToolId } from '@/lib/toolCatalog'
 import { getMostUsedTools } from '@/utils/toolUsage'
 import { ChevronRight, Wrench } from 'lucide-react'
 
 export function QuickTools(): React.ReactElement {
-    const [topTools, setTopTools] = useState<typeof tools>([])
+    const [topTools, setTopTools] = useState<typeof allTools>([])
 
     const loadTopTools = () => {
         const stats = getMostUsedTools(6)
         if (stats.length === 0) {
-            setTopTools(tools.slice(0, 6))
+            setTopTools(allTools.slice(0, 6))
         } else {
             const sortedTools = stats
-                .map(stat => tools.find(tool => tool.id === stat.id))
-                .filter((tool): tool is typeof tools[0] => tool !== undefined)
+                .map(stat => allTools.find(tool => tool.id === stat.id))
+                .filter((tool): tool is typeof allTools[0] => tool !== undefined)
 
-            const remaining = tools
+            const remaining = allTools
                 .filter(tool => !sortedTools.find(t => t.id === tool.id))
                 .slice(0, 6 - sortedTools.length)
 
@@ -27,7 +27,7 @@ export function QuickTools(): React.ReactElement {
         loadTopTools()
     }, [])
 
-    const handleToolClick = (toolId: ToolType) => {
+    const handleToolClick = (toolId: ToolId) => {
         window.dispatchEvent(new CustomEvent('navigate-to-tool', {
             detail: { toolId }
         }))
@@ -56,7 +56,6 @@ export function QuickTools(): React.ReactElement {
                 </button>
             </div>
 
-            {/* 极轻量水平胶囊流 (Dock Pills) */}
             <div className="flex flex-wrap gap-2 pt-0.5">
                 {topTools.map((tool) => {
                     const smallIcon = cloneElement(tool.icon as React.ReactElement, {

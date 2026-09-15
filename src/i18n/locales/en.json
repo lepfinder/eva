@@ -13,13 +13,15 @@
     "dashboard": "Dashboard",
 
     "navigation": "Navigation",
+    "localports": "Local Ports",
+    "memory": "Memory",
+    "envdetector": "Environment",
     "toolbox": "Toolbox",
     "visualrecall": "Visual Recall",
 
     "vault": "Vault",
     "clipboard": "Clipboard",
     "timeauditor": "Time Auditor",
-    "services": "Local Services",
     "skillCenter": "Skill Center",
     "cheatsheet": "Cheat Sheet",
     "settings": "Settings"

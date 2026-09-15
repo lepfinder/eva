@@ -4,7 +4,6 @@ import {
     Radio,
     Wrench,
     Compass,
-    Server,
     Clipboard,
     Timer,
     MonitorPlay,
@@ -27,7 +26,7 @@ import {
     Combine
 } from 'lucide-react'
 import { NavItem } from '@/components/layout/Sidebar'
-import { tools as toolboxTools } from '@/pages/ToolboxPage'
+import { toolboxTools } from '@/lib/toolCatalog'
 
 interface ListeningPort {
     protocol: 'tcp' | 'udp'
@@ -254,8 +253,10 @@ export function CommandPaletteModal(): React.ReactElement | null {
         const navList: { id: NavItem; title: string; subtitle: string; icon: React.ReactNode }[] = [
             { id: 'dashboard', title: '仪表盘', subtitle: '概览、时间活跃与 EVA 智能副驾', icon: <LayoutDashboard className="h-4 w-4 text-blue-500" /> },
             { id: 'navigation', title: '网站导航', subtitle: '分类书签与常用工具链站点', icon: <Compass className="h-4 w-4 text-indigo-500" /> },
-            { id: 'services', title: '本地服务', subtitle: '本地微服务管理与启停控制', icon: <Server className="h-4 w-4 text-emerald-500" /> },
-            { id: 'toolbox', title: '全部工具箱', subtitle: '端口、环境、密码与各类开发者瑞士军刀', icon: <Wrench className="h-4 w-4 text-violet-500" /> },
+            { id: 'localports', title: '本地监听端口', subtitle: '查看本机端口占用与进程，⌘P 直达', icon: <Radio className="h-4 w-4 text-sky-500" /> },
+            { id: 'memory', title: '内存分析', subtitle: '进程树聚合，识别内存刺客', icon: <Cpu className="h-4 w-4 text-emerald-500" /> },
+            { id: 'envdetector', title: '环境探测', subtitle: '本机开发工具版本与路径', icon: <Code className="h-4 w-4 text-teal-500" /> },
+            { id: 'toolbox', title: '全部工具箱', subtitle: 'JSON、密码、SQL 等实用小工具', icon: <Wrench className="h-4 w-4 text-violet-500" /> },
             { id: 'clipboard', title: '剪贴板历史', subtitle: '富媒体剪贴记录与模糊全文搜索', icon: <Clipboard className="h-4 w-4 text-amber-500" /> },
             { id: 'timeauditor', title: '时间审计看板', subtitle: '全天工作时长、工程投入占比与热力流', icon: <Timer className="h-4 w-4 text-pink-500" /> },
             { id: 'visualrecall', title: '视觉回溯', subtitle: '工作记忆快照与时间旅行回放', icon: <MonitorPlay className="h-4 w-4 text-cyan-500" /> },

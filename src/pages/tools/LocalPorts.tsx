@@ -110,7 +110,7 @@ export function LocalPorts() {
             {/* 搜索和刷新 */}
             <div className="flex items-center justify-between gap-4">
                 <div className="relative flex-1 max-w-xs">
-                    <span className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3">
+                    <span className="pointer-events-none absolute inset-y-0 left-0 z-10 flex items-center pl-3">
                         <Search className="h-4 w-4 text-muted-foreground" />
                     </span>
                     <Input
@@ -119,7 +119,7 @@ export function LocalPorts() {
                         placeholder="搜索端口号、进程名..."
                         value={searchQuery}
                         onChange={(e) => setSearchQuery(e.target.value)}
-                        className="pl-9 pr-8"
+                        className="pl-9 pr-8 focus-visible:ring-1 focus-visible:ring-offset-0"
                     />
                     {searchQuery && (
                         <button

@@ -10,8 +10,6 @@ pub mod navigation;
 pub mod settings;
 pub mod vault;
 pub mod visual_recall;
-pub mod service_discovery;
-pub mod service_manager;
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -316,21 +314,6 @@ pub fn run() {
             visual_recall::visual_recall_get_image_data,
             visual_recall::visual_recall_check_permission,
             visual_recall::visual_recall_request_permission,
-            // Local Services
-            service_manager::service_list,
-            service_manager::service_status,
-            service_manager::service_start,
-            service_manager::service_stop,
-            service_manager::service_restart,
-            service_manager::service_open,
-            service_manager::service_open_in_ide,
-            service_manager::service_detect_ides,
-            service_manager::service_tail_log,
-            service_manager::service_pick_folder,
-            service_manager::service_scan_project,
-            service_manager::service_probe_candidate,
-            service_manager::service_upsert,
-            service_manager::service_remove,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

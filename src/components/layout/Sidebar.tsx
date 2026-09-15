@@ -11,7 +11,9 @@ import {
   Clipboard,
   Timer,
   MonitorPlay,
-  Server,
+  Radio,
+  Activity,
+  SearchCode,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
@@ -20,7 +22,18 @@ import { Separator } from '@/components/ui/separator'
 import logoImage from '@/assets/logo.png'
 import { version as appVersion } from '../../../package.json'
 
-export type NavItem = 'dashboard' | 'navigation' | 'toolbox' | 'services' | 'vault' | 'clipboard' | 'timeauditor' | 'visualrecall' | 'settings'
+export type NavItem =
+  | 'dashboard'
+  | 'navigation'
+  | 'localports'
+  | 'memory'
+  | 'envdetector'
+  | 'toolbox'
+  | 'vault'
+  | 'clipboard'
+  | 'timeauditor'
+  | 'visualrecall'
+  | 'settings'
 
 interface SidebarProps {
   activeNav: NavItem
@@ -38,7 +51,9 @@ const navGroups = [
     title: 'ACTION',
     items: [
       { id: 'navigation', labelKey: 'nav.navigation', icon: <Compass className="h-5 w-5" /> },
-      { id: 'services', labelKey: 'nav.services', icon: <Server className="h-5 w-5" /> },
+      { id: 'localports', labelKey: 'nav.localports', icon: <Radio className="h-5 w-5" /> },
+      { id: 'memory', labelKey: 'nav.memory', icon: <Activity className="h-5 w-5" /> },
+      { id: 'envdetector', labelKey: 'nav.envdetector', icon: <SearchCode className="h-5 w-5" /> },
       { id: 'toolbox', labelKey: 'nav.toolbox', icon: <Wrench className="h-5 w-5" /> }
     ]
   },

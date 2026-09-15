@@ -10,15 +10,21 @@ import { VaultPage } from '@/pages/VaultPage'
 import { ClipboardHistoryPage } from '@/pages/ClipboardHistoryPage'
 import { TimeAuditorPage } from '@/pages/TimeAuditorPage'
 import { VisualRecallPage } from '@/pages/VisualRecallPage'
-import { ServicesPage } from '@/pages/ServicesPage'
+import { LocalPortsPage } from '@/pages/LocalPortsPage'
+import { MemoryAnalyzerPage } from '@/pages/MemoryAnalyzerPage'
+import { EnvDetectorPage } from '@/pages/EnvDetectorPage'
 import { CommandPaletteModal } from '@/components/CommandPaletteModal'
+import { resolveToolNav } from '@/lib/toolCatalog'
+import { recordToolUsage } from '@/utils/toolUsage'
 
 // 导航项到中文名称的映射
 const NAV_TITLE_MAP: Record<NavItem, string> = {
   dashboard: '仪表盘',
   navigation: '网站导航',
+  localports: '本地端口',
+  memory: '内存分析',
+  envdetector: '环境探测',
   toolbox: '工具箱',
-  services: '本地服务',
   vault: '安全保险箱',
   clipboard: '剪贴板历史',
   timeauditor: '时间审计',
@@ -76,18 +82,21 @@ export function MainLayoutContents(): React.ReactElement {
     const handleNavigateToTool = (e: Event) => {
       const customEvent = e as CustomEvent<{ toolId: string }>
       const toolId = customEvent.detail?.toolId
+      if (!toolId) return
 
-      if (toolId) {
-        // 切换到工具箱页面
-        setActiveNav('toolbox')
-
-        // 稍后发送工具切换事件给ToolboxPage
-        setTimeout(() => {
-          window.dispatchEvent(new CustomEvent('open-tool', {
-            detail: { toolId }
-          }))
-        }, 100)
+      const sidebarNav = resolveToolNav(toolId)
+      if (sidebarNav) {
+        recordToolUsage(toolId)
+        setActiveNav(sidebarNav)
+        return
       }
+
+      setActiveNav('toolbox')
+      setTimeout(() => {
+        window.dispatchEvent(new CustomEvent('open-tool', {
+          detail: { toolId }
+        }))
+      }, 100)
     }
 
     window.addEventListener('navigate-to-tool', handleNavigateToTool)
@@ -127,15 +136,11 @@ export function MainLayoutContents(): React.ReactElement {
     const handleKeyDown = (e: KeyboardEvent) => {
       const isCmdOrCtrl = e.metaKey || e.ctrlKey
 
-      // 1. Cmd + P: 直达本地监听端口工具 (并拦截默认的浏览器打印弹窗)
+      // 1. Cmd + P: 直达本地监听端口
       if (isCmdOrCtrl && (e.key === 'p' || e.key === 'P')) {
         e.preventDefault()
-        setActiveNav('toolbox')
-        setTimeout(() => {
-          window.dispatchEvent(new CustomEvent('open-tool', {
-            detail: { toolId: 'local-ports' }
-          }))
-        }, 100)
+        recordToolUsage('local-ports')
+        setActiveNav('localports')
         return
       }
 
@@ -151,15 +156,15 @@ export function MainLayoutContents(): React.ReactElement {
       const isInput = target?.tagName === 'INPUT' || target?.tagName === 'TEXTAREA' || target?.isContentEditable
       if (isCmdOrCtrl && !isInput) {
         const numToNav: Record<string, NavItem> = {
-          '1': 'dashboard',    // CORE: 仪表盘
-          '2': 'navigation',   // ACTION: 网站导航
-          '3': 'services',     // ACTION: 本地服务
-          '4': 'toolbox',      // ACTION: 工具箱
-          '5': 'clipboard',    // MEMORY: 剪贴板
-          '6': 'timeauditor',  // MEMORY: 时间审计
-          '7': 'visualrecall', // MEMORY: 视觉回溯
-          '8': 'vault',        // MEMORY: 保险箱
-          '9': 'settings',     // 底部: 设置
+          '1': 'dashboard',
+          '2': 'navigation',
+          '3': 'localports',
+          '4': 'memory',
+          '5': 'envdetector',
+          '6': 'toolbox',
+          '7': 'clipboard',
+          '8': 'timeauditor',
+          '9': 'visualrecall',
         }
         if (numToNav[e.key]) {
           e.preventDefault()
@@ -179,10 +184,14 @@ export function MainLayoutContents(): React.ReactElement {
 
       case 'navigation':
         return <NavigationPage />
+      case 'localports':
+        return <LocalPortsPage />
+      case 'memory':
+        return <MemoryAnalyzerPage />
+      case 'envdetector':
+        return <EnvDetectorPage />
       case 'toolbox':
         return <ToolboxPage onSubTitleChange={setSubTitle} />
-      case 'services':
-        return <ServicesPage />
       case 'vault':
         return <VaultPage />
       case 'clipboard':
@@ -199,7 +208,17 @@ export function MainLayoutContents(): React.ReactElement {
     }
   }
 
-  const isFullHeightPage = activeNav === 'dashboard' || activeNav === 'navigation' || activeNav === 'toolbox' || activeNav === 'services' || activeNav === 'vault' || activeNav === 'clipboard' || activeNav === 'timeauditor' || activeNav === 'visualrecall'
+  const isFullHeightPage =
+    activeNav === 'dashboard' ||
+    activeNav === 'navigation' ||
+    activeNav === 'localports' ||
+    activeNav === 'memory' ||
+    activeNav === 'envdetector' ||
+    activeNav === 'toolbox' ||
+    activeNav === 'vault' ||
+    activeNav === 'clipboard' ||
+    activeNav === 'timeauditor' ||
+    activeNav === 'visualrecall'
 
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-background">
