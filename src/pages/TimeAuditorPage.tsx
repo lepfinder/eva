@@ -656,6 +656,7 @@ ${lines}`
                                 messages: [{ role: 'user', content: prompt }],
                                 maxTokens: 1200,
                                 temperature: 0,
+                                source: 'time-auditor',
                             })
                             const text: string = data.choices?.[0]?.message?.content || ''
                             // Extract JSON array from response (may have markdown fences)
@@ -907,6 +908,7 @@ ${lines}`
                 model: aiCfg.config.model,
                 messages: [{ role: 'user', content: prompt }],
                 maxTokens: 300,
+                source: 'time-auditor',
             })
 
             const aiText = data.choices?.[0]?.message?.content || '（AI 未返回内容）'

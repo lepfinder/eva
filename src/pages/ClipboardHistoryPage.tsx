@@ -8,7 +8,7 @@ import {
     Copy, Check, Trash2, Search, Clock, Image, Code, Type,
     Palette, FileText, RefreshCw, MoreVertical, X, Loader2,
     Calendar, CalendarDays, PanelLeftClose, PanelLeft,
-    Layers, FilterX, ZoomIn
+    Layers, FilterX, ZoomIn, ScanText
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -60,6 +60,7 @@ interface ClipboardItem {
     thumbPath?: string
     language?: string
     colorValue?: string
+    hash?: string
 }
 
 interface DailyStat {
@@ -255,6 +256,85 @@ function ImagePreviewDialog({
     )
 }
 
+// AI 识别结果弹窗（按图片 hash 关联最近的识别记录）
+function OcrResultDialog({
+    item,
+    open,
+    onOpenChange,
+}: {
+    item: ClipboardItem | null
+    open: boolean
+    onOpenChange: (open: boolean) => void
+}) {
+    const [loading, setLoading] = useState(false)
+    const [result, setResult] = useState<string | null>(null)
+    const [meta, setMeta] = useState<string>('')
+    const [copied, setCopied] = useState(false)
+
+    useEffect(() => {
+        if (!open || !item?.hash) return
+        let cancelled = false
+        setLoading(true)
+        setResult(null)
+        setCopied(false)
+        window.api.ai.getCallByHash(item.hash)
+            .then((call: any) => {
+                if (cancelled) return
+                setResult(call?.response || '')
+                setMeta(call ? `${call.model} · ${(call.elapsedMs / 1000).toFixed(1)}s` : '')
+            })
+            .catch(() => { if (!cancelled) setResult('') })
+            .finally(() => { if (!cancelled) setLoading(false) })
+        return () => { cancelled = true }
+    }, [open, item?.hash])
+
+    const copyResult = async () => {
+        if (!result) return
+        try {
+            await window.api.clipboard.setText(result)
+            setCopied(true)
+            setTimeout(() => setCopied(false), 1500)
+        } catch { /* ignore */ }
+    }
+
+    return (
+        <Dialog open={open} onOpenChange={onOpenChange}>
+            <DialogContent className="max-w-[min(92vw,760px)] w-full gap-3 overflow-hidden p-4 sm:rounded-xl">
+                <DialogHeader className="pr-8 text-left">
+                    <DialogTitle className="flex items-center gap-2 text-base">
+                        <ScanText className="h-4 w-4 text-zinc-500" />
+                        AI 识别结果
+                    </DialogTitle>
+                    <DialogDescription className="text-xs">
+                        {item ? `${formatTime(item.timestamp)}${item.sourceApp ? ` · ${item.sourceApp}` : ''}` : ''}
+                        {meta ? ` · ${meta}` : ''}
+                    </DialogDescription>
+                </DialogHeader>
+                <div className="max-h-[min(60vh,560px)] overflow-y-auto rounded-lg bg-zinc-100 dark:bg-zinc-900/80 p-4">
+                    {loading ? (
+                        <div className="flex items-center gap-2 text-sm text-zinc-400">
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                            加载识别结果…
+                        </div>
+                    ) : result ? (
+                        <p className="text-sm font-mono whitespace-pre-wrap break-words text-zinc-700 dark:text-zinc-300">{result}</p>
+                    ) : (
+                        <p className="text-sm text-zinc-400">未找到识别结果。</p>
+                    )}
+                </div>
+                <div className="flex justify-end gap-2">
+                    <Button type="button" variant="outline" size="sm" onClick={() => onOpenChange(false)}>
+                        关闭
+                    </Button>
+                    <Button type="button" size="sm" onClick={copyResult} disabled={!result}>
+                        {copied ? <Check className="mr-1.5 h-3.5 w-3.5" /> : <Copy className="mr-1.5 h-3.5 w-3.5" />}
+                        {copied ? '已复制' : '复制结果'}
+                    </Button>
+                </div>
+            </DialogContent>
+        </Dialog>
+    )
+}
 // 代码语法高亮（简化版）
 function CodeHighlight({ code, language }: { code: string; language?: string }) {
     const keywords = {
@@ -302,7 +382,9 @@ const ClipboardCard = memo(function ClipboardCard({
     onDelete,
     onPreview,
     copied,
-    copying
+    copying,
+    ocrd,
+    onShowOcr,
 }: {
     item: ClipboardItem
     onCopy: (id: string) => void
@@ -310,6 +392,8 @@ const ClipboardCard = memo(function ClipboardCard({
     onPreview?: (item: ClipboardItem) => void
     copied: boolean
     copying: boolean
+    ocrd?: boolean
+    onShowOcr?: (item: ClipboardItem) => void
 }) {
     return (
         <div
@@ -330,6 +414,20 @@ const ClipboardCard = memo(function ClipboardCard({
                         <span className="ml-1">{item.type}</span>
                         {item.language && <span className="ml-1 opacity-70">• {item.language}</span>}
                     </Badge>
+                    {ocrd && onShowOcr && (
+                        <button
+                            type="button"
+                            title="查看 AI 识别结果"
+                            className="flex items-center gap-1 px-1.5 py-0.5 rounded-md text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
+                            onClick={(e) => {
+                                e.stopPropagation()
+                                onShowOcr(item)
+                            }}
+                        >
+                            <ScanText className="h-3.5 w-3.5" />
+                            <span className="text-[10px]">已识别</span>
+                        </button>
+                    )}
                 </div>
 
                 <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
@@ -447,8 +545,18 @@ export function ClipboardHistoryPage() {
     const [selectedType, setSelectedType] = useState<ClipboardItemType | null>(null)
     const [isSidebarOpen, setIsSidebarOpen] = useState(true)
     const [hasMore, setHasMore] = useState(true)
+    const [ocrHashes, setOcrHashes] = useState<Set<string>>(new Set())
+    const [ocrItem, setOcrItem] = useState<ClipboardItem | null>(null)
     const loadMoreRef = useRef<HTMLDivElement>(null)
     const itemsPerPage = 30
+
+    // 已识别图片的 hash 集合（与 AI 调用记录关联）
+    const loadOcrHashes = useCallback(async () => {
+        try {
+            const hashes: string[] = await window.api.ai.ocrHashes()
+            setOcrHashes(new Set(Array.isArray(hashes) ? hashes : []))
+        } catch { /* ignore */ }
+    }, [])
 
     // 加载每日统计
     const loadDailyStats = useCallback(async () => {
@@ -503,6 +611,7 @@ export function ClipboardHistoryPage() {
         loadItems(true)
         loadStats()
         loadDailyStats()
+        loadOcrHashes()
     }, [])
 
     // 监听新条目事件，自动刷新数据与统计
@@ -519,6 +628,7 @@ export function ClipboardHistoryPage() {
             }
             loadStats()
             loadDailyStats()
+            loadOcrHashes()
         }).then(fn => {
             if (cancelled) {
                 fn()
@@ -531,7 +641,7 @@ export function ClipboardHistoryPage() {
             cancelled = true
             if (unlisten) unlisten()
         }
-    }, [loadStats, loadDailyStats, selectedDate])
+    }, [loadStats, loadDailyStats, loadOcrHashes, selectedDate])
 
     // 搜索防抖
     useEffect(() => {
@@ -914,6 +1024,8 @@ export function ClipboardHistoryPage() {
                                             onPreview={handlePreview}
                                             copied={copiedId === item.id}
                                             copying={copyingId === item.id}
+                                            ocrd={item.type === 'image' && !!item.hash && ocrHashes.has(item.hash)}
+                                            onShowOcr={setOcrItem}
                                         />
                                     </div>
                                 ))}
@@ -938,6 +1050,14 @@ export function ClipboardHistoryPage() {
                     if (!open) setPreviewItem(null)
                 }}
                 onCopy={handleCopy}
+            />
+
+            <OcrResultDialog
+                item={ocrItem}
+                open={!!ocrItem}
+                onOpenChange={(open) => {
+                    if (!open) setOcrItem(null)
+                }}
             />
         </div>
     )

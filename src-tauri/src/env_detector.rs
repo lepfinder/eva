@@ -390,77 +390,111 @@ fn current_timestamp() -> String {
 
 // ==================== Commands & Direct Helpers ====================
 
-pub fn detect_all_tools(descriptions: Option<&HashMap<String, String>>) -> Vec<EnvTool> {
-    let now = current_timestamp();
-    let empty_map = HashMap::new();
-    let desc_map = descriptions.unwrap_or(&empty_map);
+fn detect_one(spec: &ToolSpec, desc_map: &HashMap<String, String>, now: &str) -> EnvTool {
+    let path = which(spec.binary);
+    let saved_desc = desc_map.get(spec.id).cloned();
+    let description = saved_desc.or_else(|| Some(spec.description.to_string()));
 
-    TOOLS
-        .iter()
-        .map(|spec| {
-            let path = which(spec.binary);
-            let saved_desc = desc_map.get(spec.id).cloned();
-            let description = saved_desc.or_else(|| Some(spec.description.to_string()));
-
-            if let Some(ref bin_path) = path {
-                // Tool found – get version
-                match run_version_cmd(spec.binary, spec.version_args) {
-                    Ok(output) => {
-                        let version = extract_version(&output);
-                        EnvTool {
-                            id: spec.id.to_string(),
-                            name: spec.name.to_string(),
-                            category: spec.category.to_string(),
-                            description,
-                            tags: spec.tags.iter().map(|t| t.to_string()).collect(),
-                            installed: true,
-                            version,
-                            path: Some(bin_path.clone()),
-                            command: format!("{} {}", spec.binary, spec.version_args.join(" ")),
-                            status: "ok".to_string(),
-                            checked_at: now.clone(),
-                            error: None,
-                        }
-                    }
-                    Err(e) => EnvTool {
-                        id: spec.id.to_string(),
-                        name: spec.name.to_string(),
-                        category: spec.category.to_string(),
-                        description,
-                        tags: spec.tags.iter().map(|t| t.to_string()).collect(),
-                        installed: true,
-                        version: None,
-                        path: Some(bin_path.clone()),
-                        command: spec.binary.to_string(),
-                        status: "error".to_string(),
-                        checked_at: now.clone(),
-                        error: Some(e),
-                    },
-                }
-            } else {
+    if let Some(ref bin_path) = path {
+        // Tool found – get version
+        match run_version_cmd(spec.binary, spec.version_args) {
+            Ok(output) => {
+                let version = extract_version(&output);
                 EnvTool {
                     id: spec.id.to_string(),
                     name: spec.name.to_string(),
                     category: spec.category.to_string(),
                     description,
                     tags: spec.tags.iter().map(|t| t.to_string()).collect(),
-                    installed: false,
-                    version: None,
-                    path: None,
-                    command: spec.binary.to_string(),
-                    status: "not_installed".to_string(),
-                    checked_at: now.clone(),
+                    installed: true,
+                    version,
+                    path: Some(bin_path.clone()),
+                    command: format!("{} {}", spec.binary, spec.version_args.join(" ")),
+                    status: "ok".to_string(),
+                    checked_at: now.to_string(),
                     error: None,
                 }
             }
-        })
-        .collect()
+            Err(e) => EnvTool {
+                id: spec.id.to_string(),
+                name: spec.name.to_string(),
+                category: spec.category.to_string(),
+                description,
+                tags: spec.tags.iter().map(|t| t.to_string()).collect(),
+                installed: true,
+                version: None,
+                path: Some(bin_path.clone()),
+                command: spec.binary.to_string(),
+                status: "error".to_string(),
+                checked_at: now.to_string(),
+                error: Some(e),
+            },
+        }
+    } else {
+        EnvTool {
+            id: spec.id.to_string(),
+            name: spec.name.to_string(),
+            category: spec.category.to_string(),
+            description,
+            tags: spec.tags.iter().map(|t| t.to_string()).collect(),
+            installed: false,
+            version: None,
+            path: None,
+            command: spec.binary.to_string(),
+            status: "not_installed".to_string(),
+            checked_at: now.to_string(),
+            error: None,
+        }
+    }
+}
+
+fn detect_one_not_installed(spec: &ToolSpec, now: &str) -> EnvTool {
+    EnvTool {
+        id: spec.id.to_string(),
+        name: spec.name.to_string(),
+        category: spec.category.to_string(),
+        description: Some(spec.description.to_string()),
+        tags: spec.tags.iter().map(|t| t.to_string()).collect(),
+        installed: false,
+        version: None,
+        path: None,
+        command: spec.binary.to_string(),
+        status: "not_installed".to_string(),
+        checked_at: now.to_string(),
+        error: None,
+    }
+}
+
+/// Detect all tools in parallel — each check spawns subprocesses, so wall time
+/// is bounded by the slowest single tool instead of the sum of all of them.
+pub fn detect_all_tools(descriptions: Option<&HashMap<String, String>>) -> Vec<EnvTool> {
+    let empty_map = HashMap::new();
+    let desc_map = descriptions.unwrap_or(&empty_map);
+    let now = current_timestamp();
+
+    std::thread::scope(|s| {
+        let handles: Vec<_> = TOOLS
+            .iter()
+            .map(|spec| {
+                let now = now.clone();
+                s.spawn(move || detect_one(spec, desc_map, &now))
+            })
+            .collect();
+        let mut tools = Vec::with_capacity(TOOLS.len());
+        for (spec, h) in TOOLS.iter().zip(handles) {
+            tools.push(h.join().unwrap_or_else(|_| detect_one_not_installed(spec, &now)));
+        }
+        tools
+    })
 }
 
 #[tauri::command]
-pub fn env_detect(app: AppHandle) -> Vec<EnvTool> {
+pub async fn env_detect(app: AppHandle) -> Result<Vec<EnvTool>, String> {
     let descriptions = load_descriptions(&app);
-    detect_all_tools(Some(&descriptions))
+    // Blocking subprocess scan must stay off the main thread or the whole UI freezes.
+    tauri::async_runtime::spawn_blocking(move || detect_all_tools(Some(&descriptions)))
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]

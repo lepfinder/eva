@@ -159,6 +159,7 @@ export function EvaSpeechBubble(): React.ReactElement {
                 messages: [{ role: 'user', content: prompt }],
                 maxTokens: 100,
                 temperature: 0.6,
+                source: 'speech-bubble',
             })
 
             const speech = (data.choices?.[0]?.message?.content || '').trim().replace(/^["'“”]+|["'“”]+$/g, '')

@@ -44,6 +44,9 @@ pub struct ClipboardItem {
     pub thumb_path: Option<String>,
     pub language: Option<String>,
     pub color_value: Option<String>,
+    /// sha256 of the deterministic PNG bytes for image items; links OCR records.
+    #[serde(default)]
+    pub hash: String,
     /// Full HTML for rich-text paste-back. Omitted from list/search IPC payloads.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub html_content: Option<String>,
@@ -98,7 +101,8 @@ impl ClipboardState {
                     image_path TEXT,
                     language   TEXT,
                     color_value TEXT,
-                    html_content TEXT
+                    html_content TEXT,
+                    hash       TEXT NOT NULL DEFAULT ''
                 );
                 CREATE INDEX IF NOT EXISTS idx_timestamp ON clipboard_items(timestamp DESC);
                 ",
@@ -108,6 +112,27 @@ impl ClipboardState {
                 "ALTER TABLE clipboard_items ADD COLUMN html_content TEXT",
                 [],
             );
+            let _ = conn.execute(
+                "ALTER TABLE clipboard_items ADD COLUMN hash TEXT NOT NULL DEFAULT ''",
+                [],
+            );
+            // One-time backfill: the stored file contains exactly the PNG bytes hashed at capture.
+            let pending: Vec<(String, String)> = conn
+                .prepare("SELECT id, content FROM clipboard_items WHERE type='image' AND hash=''")
+                .and_then(|mut s| {
+                    let rows = s.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+                    Ok::<Vec<(String, String)>, rusqlite::Error>(rows.flatten().collect())
+                })
+                .unwrap_or_default();
+            for (id, path) in pending {
+                if let Ok(bytes) = fs::read(&path) {
+                    let h = image_hash(&bytes);
+                    let _ = conn.execute(
+                        "UPDATE clipboard_items SET hash = ?1 WHERE id = ?2",
+                        params![h, id],
+                    );
+                }
+            }
         }
 
         Ok(ClipboardState {
@@ -611,8 +636,8 @@ fn record_insert_and_maybe_cleanup(state: &SharedClipboardState, item: &Clipboar
 fn db_insert(conn: &Connection, item: &ClipboardItem) -> Result<(), rusqlite::Error> {
     conn.execute(
         "INSERT OR REPLACE INTO clipboard_items
-         (id, type, content, preview, source_app, timestamp, image_path, language, color_value, html_content)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+         (id, type, content, preview, source_app, timestamp, image_path, language, color_value, html_content, hash)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
         params![
             item.id,
             item.item_type,
@@ -624,6 +649,7 @@ fn db_insert(conn: &Connection, item: &ClipboardItem) -> Result<(), rusqlite::Er
             item.language,
             item.color_value,
             item.html_content,
+            item.hash,
         ],
     )?;
     Ok(())
@@ -674,6 +700,7 @@ fn row_to_item(row: &rusqlite::Row<'_>) -> rusqlite::Result<ClipboardItem> {
         thumb_path,
         language: row.get(7)?,
         color_value: row.get(8)?,
+        hash: row.get::<_, Option<String>>(9)?.unwrap_or_default(),
         // List/search queries intentionally omit html_content to keep IPC payloads small.
         html_content: None,
     })
@@ -740,7 +767,7 @@ pub fn start_polling(app: AppHandle, state: SharedClipboardState) {
                         if hash == guard.last_image_hash {
                             continue;
                         }
-                        guard.last_image_hash = hash;
+                        guard.last_image_hash = hash.clone();
                     }
 
                     let source_app = get_source_app();
@@ -768,6 +795,7 @@ pub fn start_polling(app: AppHandle, state: SharedClipboardState) {
                             thumb_path,
                             language: None,
                             color_value: None,
+                            hash,
                             html_content: None,
                         };
 
@@ -813,6 +841,7 @@ pub fn start_polling(app: AppHandle, state: SharedClipboardState) {
                     thumb_path: None,
                     language: detected.language.map(str::to_string),
                     color_value: detected.color_value,
+                    hash: String::new(),
                     html_content,
                 };
 
@@ -871,7 +900,7 @@ pub fn db_get_items(conn: &Connection, limit: i64, offset: i64, date_filter: Opt
         let mut stmt = match conn.prepare(
             "SELECT id, type,
                     CASE WHEN type = 'image' THEN content ELSE substr(content, 1, 1200) END AS content,
-                    preview, source_app, timestamp, image_path, language, color_value
+                    preview, source_app, timestamp, image_path, language, color_value, hash
              FROM clipboard_items
              WHERE date(datetime(timestamp / 1000, 'unixepoch', 'localtime')) = ?1
              ORDER BY timestamp DESC LIMIT ?2 OFFSET ?3",
@@ -887,7 +916,7 @@ pub fn db_get_items(conn: &Connection, limit: i64, offset: i64, date_filter: Opt
         let mut stmt = match conn.prepare(
             "SELECT id, type,
                     CASE WHEN type = 'image' THEN content ELSE substr(content, 1, 1200) END AS content,
-                    preview, source_app, timestamp, image_path, language, color_value
+                    preview, source_app, timestamp, image_path, language, color_value, hash
              FROM clipboard_items ORDER BY timestamp DESC LIMIT ?1 OFFSET ?2",
         ) {
             Ok(s) => s,
@@ -910,7 +939,7 @@ pub fn db_search_items(conn: &Connection, query: &str, limit: i64, date_filter: 
         let mut stmt = match conn.prepare(
             "SELECT id, type,
                     CASE WHEN type = 'image' THEN content ELSE substr(content, 1, 1200) END AS content,
-                    preview, source_app, timestamp, image_path, language, color_value
+                    preview, source_app, timestamp, image_path, language, color_value, hash
              FROM clipboard_items
              WHERE (content LIKE ?1 OR preview LIKE ?2 OR source_app LIKE ?3)
                AND date(datetime(timestamp / 1000, 'unixepoch', 'localtime')) = ?4
@@ -927,7 +956,7 @@ pub fn db_search_items(conn: &Connection, query: &str, limit: i64, date_filter: 
         let mut stmt = match conn.prepare(
             "SELECT id, type,
                     CASE WHEN type = 'image' THEN content ELSE substr(content, 1, 1200) END AS content,
-                    preview, source_app, timestamp, image_path, language, color_value
+                    preview, source_app, timestamp, image_path, language, color_value, hash
              FROM clipboard_items
              WHERE (content LIKE ?1 OR preview LIKE ?2 OR source_app LIKE ?3)
              ORDER BY timestamp DESC LIMIT ?4",
@@ -1097,6 +1126,91 @@ fn clipboard_write_to_clipboard_sync(state: &SharedClipboardState, id: &str) -> 
         abort_own_write(state);
         false
     }
+}
+
+/// Downscale to MAX_EDGE and flatten onto white as JPEG — ~10x smaller than a PNG
+/// screenshot, which is the dominant factor in vision-model request latency.
+fn compress_image_for_ai(img: &arboard::ImageData) -> Option<Vec<u8>> {
+    use image::{ImageBuffer, Rgba};
+    const MAX_EDGE: u32 = 1568;
+    let rgba_bytes = img.bytes.clone().into_owned();
+    let buf: ImageBuffer<Rgba<u8>, Vec<u8>> =
+        ImageBuffer::from_raw(img.width as u32, img.height as u32, rgba_bytes)?;
+    let dyn_img = image::DynamicImage::ImageRgba8(buf);
+    let rgb = if dyn_img.width().max(dyn_img.height()) > MAX_EDGE {
+        dyn_img.thumbnail(MAX_EDGE, MAX_EDGE).to_rgb8()
+    } else {
+        dyn_img.to_rgb8()
+    };
+    let mut jpeg_bytes: Vec<u8> = Vec::new();
+    let encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg_bytes, 85);
+    rgb.write_with_encoder(encoder).ok()?;
+    if jpeg_bytes.is_empty() {
+        None
+    } else {
+        log::info!(
+            "[AI] clipboard image compressed {}x{} -> {}x{} jpeg {}KB",
+            img.width,
+            img.height,
+            rgb.width(),
+            rgb.height(),
+            jpeg_bytes.len() / 1024
+        );
+        Some(jpeg_bytes)
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CurrentClipboardImage {
+    pub data_url: String,
+    /// sha256 of the deterministic PNG bytes — matches clipboard_items.hash.
+    pub hash: String,
+}
+
+/// Read the image currently on the system clipboard as a data URL, preferring a
+/// downscaled JPEG for faster upload to multimodal models. Also archives the
+/// compressed image keyed by hash so history/OCR views can show it later.
+#[tauri::command]
+pub fn clipboard_get_current_image(app: AppHandle) -> Option<CurrentClipboardImage> {
+    use base64::Engine;
+    let mut cb = Clipboard::new().ok()?;
+    let img = cb.get_image().ok()?;
+    let png_data = encode_clipboard_image_png(&img);
+    if png_data.is_empty() {
+        return None;
+    }
+    let hash = image_hash(&png_data);
+
+    if let Some(jpeg) = compress_image_for_ai(&img) {
+        if let Ok(dir) = app.path().app_data_dir() {
+            let dir = dir.join("userData").join("ai-images");
+            if fs::create_dir_all(&dir).is_ok() {
+                let _ = fs::write(dir.join(format!("{}.jpg", hash)), &jpeg);
+            }
+        }
+        return Some(CurrentClipboardImage {
+            data_url: format!(
+                "data:image/jpeg;base64,{}",
+                base64::engine::general_purpose::STANDARD.encode(&jpeg)
+            ),
+            hash,
+        });
+    }
+    Some(CurrentClipboardImage {
+        data_url: format!(
+            "data:image/png;base64,{}",
+            base64::engine::general_purpose::STANDARD.encode(&png_data)
+        ),
+        hash,
+    })
+}
+
+/// Write plain text to the system clipboard. Deliberately not marking own-write
+/// so the poller records the recognised text into clipboard history as well.
+#[tauri::command]
+pub fn clipboard_set_text(content: String) -> bool {
+    set_clipboard_text(&content).is_ok()
 }
 
 #[tauri::command]

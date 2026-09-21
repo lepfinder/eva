@@ -7,7 +7,7 @@ import { Separator } from '@/components/ui/separator'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
 import { Switch } from '@/components/ui/switch'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { AiProviderSettings } from '@/components/AiProviderSettings'
+import { AiProviderSettings, AiCallHistory } from '@/components/AiProviderSettings'
 import { changeLanguage, getCurrentLanguage } from '@/i18n'
 import { version as appVersion } from '../../package.json'
 import {
@@ -28,6 +28,7 @@ import {
   FileText,
   Wifi,
   Sparkles,
+  History,
   Radio,
   Eye,
   EyeOff,
@@ -83,7 +84,7 @@ export function SettingsPage(): React.ReactElement {
   const [storageStats, setStorageStats] = useState<StorageStats | null>(null)
   const [loadingStorage, setLoadingStorage] = useState(false)
   const [settings, setSettings] = useState<any>(null)
-  const [activeTab, setActiveTab] = useState<'appearance' | 'security' | 'hotkeys' | 'network' | 'storage' | 'about' | 'ai' | 'api'>('appearance')
+  const [activeTab, setActiveTab] = useState<'appearance' | 'security' | 'hotkeys' | 'network' | 'storage' | 'about' | 'ai' | 'ai-history' | 'api'>('appearance')
 
   // API 服务配置状态
   const [apiConfig, setApiConfig] = useState<{
@@ -447,6 +448,7 @@ export function SettingsPage(): React.ReactElement {
     { id: 'appearance', label: t('settings.appearance.title'), icon: <MonitorPlay className="h-4 w-4" /> },
     { id: 'security', label: t('settings.security.title'), icon: <Lock className="h-4 w-4" /> },
     { id: 'ai', label: 'AI 供应商', icon: <Sparkles className="h-4 w-4" /> },
+    { id: 'ai-history', label: '调用记录', icon: <History className="h-4 w-4" /> },
     { id: 'api', label: 'API 服务', icon: <Radio className="h-4 w-4" /> },
     { id: 'hotkeys', label: '全局快捷键', icon: <Keyboard className="h-4 w-4" /> },
     { id: 'network', label: '网络代理', icon: <Wifi className="h-4 w-4" /> },
@@ -564,6 +566,8 @@ export function SettingsPage(): React.ReactElement {
             )}
 
             {activeTab === 'ai' && <AiProviderSettings />}
+
+            {activeTab === 'ai-history' && <AiCallHistory />}
 
             {activeTab === 'security' && (
               <div className="space-y-6 animate-in fade-in duration-300">

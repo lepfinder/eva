@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { invoke, convertFileSrc } from '@tauri-apps/api/core'
+import { LogicalSize } from '@tauri-apps/api/dpi'
 import { listen } from '@tauri-apps/api/event'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import {
@@ -28,11 +29,14 @@ import {
     MonitorPlay,
     Lock,
     Skull,
-    AlertTriangle
+    AlertTriangle,
+    Loader2,
+    ScanText
 } from 'lucide-react'
 import { allTools as launchableTools, resolveToolNav, toolboxTools } from '@/lib/toolCatalog'
+import { getActiveAiConfig, DEFAULT_OCR_PROMPT } from '@/components/AiProviderSettings'
 
-type HubMode = 'clipboard' | 'command'
+type HubMode = 'clipboard' | 'command' | 'ocr'
 type ClipboardItemType = 'text' | 'image' | 'html' | 'color' | 'code'
 
 interface ListeningPort {
@@ -133,6 +137,17 @@ export function QuickHubView(): React.ReactElement {
     const [, setLoadingClips] = useState(false)
     const [copiedId, setCopiedId] = useState<string | null>(null)
 
+    // OCR 识别状态
+    const [ocrPhase, setOcrPhase] = useState<'running' | 'done' | 'error'>('running')
+    const [ocrText, setOcrText] = useState('')
+    const [ocrError, setOcrError] = useState('')
+    const ocrRunIdRef = useRef(0)
+    const ocrStartGuardRef = useRef(0)
+    const ocrRunningRef = useRef(false)
+
+    // 窗口显示瞬间先留白，等模式就绪再渲染，避免闪出上一次的列表
+    const [armed, setArmed] = useState(false)
+
     const inputRef = useRef<HTMLInputElement>(null)
     const listRef = useRef<HTMLDivElement>(null)
 
@@ -155,6 +170,85 @@ export function QuickHubView(): React.ReactElement {
         }
     }, [])
 
+    // 现场识别剪贴板图片：结果写回剪贴板，由用户手动 ⌘V 粘贴
+    const runOcr = useCallback(async () => {
+        // 焦点查询与事件派发可能双触发，800ms 内去重
+        const now = Date.now()
+        if (now - ocrStartGuardRef.current < 800) return
+        ocrStartGuardRef.current = now
+
+        const runId = ++ocrRunIdRef.current
+        const isCurrent = () => ocrRunIdRef.current === runId
+        ocrRunningRef.current = true
+        const fail = (msg: string) => {
+            if (!isCurrent()) return
+            ocrRunningRef.current = false
+            setOcrPhase('error')
+            setOcrError(msg)
+        }
+
+        const aiCfg = getActiveAiConfig()
+        if (!aiCfg) {
+            fail('请先在「设置 → AI 供应商」中配置 API Key')
+            return
+        }
+        setOcrPhase('running')
+        setOcrText('')
+        setOcrError('')
+
+        try {
+            const current = await invoke<{ dataUrl: string; hash: string } | null>('clipboard_get_current_image')
+            if (!isCurrent()) return
+            if (!current) {
+                fail('剪贴板中没有图片')
+                return
+            }
+
+            const { config } = aiCfg
+            const res = await window.api.ai.chatCompletion({
+                baseUrl: config.baseUrl,
+                apiKey: config.apiKey,
+                model: config.visionModel?.trim() || config.model,
+                messages: [{
+                    role: 'user',
+                    content: [
+                        { type: 'text', text: config.ocrPrompt?.trim() || DEFAULT_OCR_PROMPT },
+                        { type: 'image_url', image_url: { url: current.dataUrl } },
+                    ],
+                }],
+                temperature: 0,
+                source: 'ocr',
+                imageHash: current.hash,
+                enableThinking: false,
+            })
+            if (!isCurrent()) return
+
+            const text: string = (res?.choices?.[0]?.message?.content || '').trim()
+            if (!text) {
+                fail('模型未返回识别内容')
+                return
+            }
+
+            const ok = await invoke<boolean>('clipboard_set_text', { content: text })
+            if (!isCurrent()) return
+            if (!ok) {
+                fail('写回剪贴板失败')
+                return
+            }
+
+            ocrRunningRef.current = false
+            setOcrPhase('done')
+            setOcrText(text)
+            setTimeout(() => {
+                if (!isCurrent()) return
+                // 收起所有 EVA 窗口并把焦点还给原应用，避免识别完主窗口抢焦点
+                void invoke('hub_hide_all').catch(() => handleClose())
+            }, 1400)
+        } catch (e: any) {
+            fail(String(e?.message || e || '识别失败'))
+        }
+    }, [handleClose])
+
     // 加载最近剪贴板
     const fetchClips = useCallback(async () => {
         setLoadingClips(true)
@@ -168,20 +262,35 @@ export function QuickHubView(): React.ReactElement {
         }
     }, [])
 
-    // 监听后端模式派发 (Option+V -> clipboard, Option+K -> command)
-    useEffect(() => {
-        const unlistenPromise = listen<string>('eva://hub-mode', (event) => {
-            const targetMode = event.payload === 'command' ? 'command' : 'clipboard'
-            setMode(targetMode)
+    // 统一应用 HUB 模式（事件与焦点两条触发路径共用）
+    const applyHubMode = useCallback((target: HubMode) => {
+        setArmed(true)
+        if (target === 'ocr') {
+            setMode('ocr')
+            // 事件与焦点两条触发路径可能相隔超过去重窗口，进行中一律不重复发起
+            if (!ocrRunningRef.current) void runOcr()
+        } else {
+            setMode(target)
             setQuery('')
             setSelectedIndex(0)
-            if (targetMode === 'clipboard') {
+            if (target === 'clipboard') {
                 fetchClips()
             }
             setTimeout(() => {
                 inputRef.current?.focus()
                 inputRef.current?.select()
             }, 50)
+        }
+        // 状态就绪后再让 Rust 显示窗口，避免空白/旧界面闪现
+        setTimeout(() => {
+            void invoke('hub_reveal').catch(() => {})
+        }, 0)
+    }, [fetchClips, runOcr])
+
+    // 监听后端模式派发 (Option+V -> clipboard, Option+K -> command, Option+O/⌘⇧; -> ocr)
+    useEffect(() => {
+        const unlistenPromise = listen<string>('eva://hub-mode', (event) => {
+            applyHubMode(event.payload === 'ocr' ? 'ocr' : event.payload === 'command' ? 'command' : 'clipboard')
         })
 
         // 默认初始化拉一次剪贴板
@@ -190,7 +299,32 @@ export function QuickHubView(): React.ReactElement {
         return () => {
             unlistenPromise.then(unlisten => unlisten())
         }
-    }, [fetchClips])
+    }, [applyHubMode, fetchClips])
+
+    // 获得焦点时向后端查询当前模式兜底（事件输给首帧渲染时也不会显示旧界面）
+    useEffect(() => {
+        let cancelled = false
+        let unlisten: (() => void) | null = null
+        void getCurrentWindow().onFocusChanged(({ payload: focused }) => {
+            if (cancelled) return
+            if (!focused) {
+                setArmed(false)
+                return
+            }
+            void invoke<number>('hub_get_mode')
+                .then(m => {
+                    if (!cancelled) applyHubMode(m === 3 ? 'ocr' : m === 2 ? 'command' : 'clipboard')
+                })
+                .catch(() => setArmed(true))
+        }).then(fn => {
+            if (cancelled) fn()
+            else unlisten = fn
+        })
+        return () => {
+            cancelled = true
+            if (unlisten) unlisten()
+        }
+    }, [applyHubMode])
 
     // 当窗口获得焦点时自动重置并拉取
     useEffect(() => {
@@ -216,6 +350,15 @@ export function QuickHubView(): React.ReactElement {
             body.style.backgroundColor = prevBg
         }
     }, [])
+
+    // OCR 模式收窄窗口高度，避免大片空白；其余模式恢复默认
+    useEffect(() => {
+        const height = mode !== 'ocr' ? 480 : ocrPhase === 'done' ? 340 : 208
+        const win = getCurrentWindow()
+        void win.setSize(new LogicalSize(640, height))
+            .then(() => (mode === 'ocr' ? win.center() : Promise.resolve()))
+            .catch(() => {})
+    }, [mode, ocrPhase])
 
     // 端口列表与冲突检测状态（需在 handleCopyItem 之前声明，供失败提示使用）
     const [ports, setPorts] = useState<ListeningPort[]>([])
@@ -528,21 +671,35 @@ export function QuickHubView(): React.ReactElement {
         }
     }, [selectedIndex])
 
+    // 刚唤出、模式尚未就绪：先渲染深色卡片壳 + 小号加载符，避免整窗空白
+    if (!armed) {
+        return (
+            <div className="w-full h-screen flex items-center justify-center rounded-2xl border border-white/10 bg-[#16161a] shadow-2xl backdrop-blur-2xl">
+                <Loader2 className="h-4 w-4 animate-spin text-zinc-500" />
+            </div>
+        )
+    }
+
     return (
         <div 
-            className="w-full h-full flex flex-col select-none overflow-hidden rounded-2xl border border-white/10 bg-[#16161a] text-zinc-100 shadow-2xl backdrop-blur-2xl"
+            className="w-full h-screen flex flex-col select-none overflow-hidden rounded-2xl border border-white/10 bg-[#16161a] text-zinc-100 shadow-2xl backdrop-blur-2xl"
             onKeyDown={handleKeyDown}
         >
             {/* 顶部搜索与模式胶囊栏 */}
             <div className="p-3.5 border-b border-white/10 flex items-center gap-2.5 bg-zinc-900/90 shrink-0">
                 <div className="flex items-center gap-2 text-zinc-400 pl-1">
-                    {mode === 'clipboard' ? (
+                    {mode === 'ocr' ? (
+                        <ScanText className="h-5 w-5 text-amber-400 animate-in zoom-in-75 duration-150" />
+                    ) : mode === 'clipboard' ? (
                         <ClipboardList className="h-5 w-5 text-indigo-400 animate-in zoom-in-75 duration-150" />
                     ) : (
                         <Search className="h-5 w-5 text-violet-400 animate-in zoom-in-75 duration-150" />
                     )}
                 </div>
 
+                {mode === 'ocr' ? (
+                    <span className="flex-1 text-sm text-zinc-200 font-medium pl-1">剪贴板图片 AI 识别</span>
+                ) : (
                 <input
                     ref={inputRef}
                     autoFocus
@@ -558,6 +715,7 @@ export function QuickHubView(): React.ReactElement {
                     }
                     className="flex-1 !bg-transparent text-sm text-zinc-100 placeholder-zinc-500 !border-none !shadow-none !ring-0 !outline-none focus:!ring-0 focus:!ring-offset-0 !px-0 !py-0 tracking-wide"
                 />
+                )}
 
                 {/* 模式切换胶囊 */}
                 <div className="flex items-center p-0.5 rounded-lg bg-zinc-800/80 border border-zinc-700/60 text-[11px] font-medium">
@@ -618,7 +776,33 @@ export function QuickHubView(): React.ReactElement {
 
             {/* 内容列表区 */}
             <div ref={listRef} className="flex-1 overflow-y-auto p-2 space-y-1.5 scrollbar-thin bg-[#121215]">
-                {mode === 'clipboard' ? (
+                {mode === 'ocr' ? (
+                    <div className="h-full flex flex-col justify-center gap-2.5 px-5 py-4 min-h-0">
+                        {ocrPhase === 'running' && (
+                            <div className="flex items-center justify-center gap-2.5">
+                                <Loader2 className="h-4 w-4 animate-spin text-amber-400 shrink-0" />
+                                <span className="text-sm text-zinc-300">正在识别剪贴板图片…</span>
+                            </div>
+                        )}
+                        {ocrPhase === 'done' && (
+                            <>
+                                <div className="flex items-center gap-2 shrink-0">
+                                    <Check className="h-4 w-4 text-emerald-400 shrink-0" />
+                                    <span className="text-xs text-zinc-300">已写入剪贴板，切回原应用 ⌘V 粘贴</span>
+                                </div>
+                                <p className="text-xs font-mono text-zinc-400 whitespace-pre-wrap break-all overflow-y-auto min-h-0">
+                                    {ocrText}
+                                </p>
+                            </>
+                        )}
+                        {ocrPhase === 'error' && (
+                            <div className="flex items-center justify-center gap-2.5">
+                                <AlertTriangle className="h-4 w-4 text-rose-400 shrink-0" />
+                                <span className="text-sm text-zinc-300">{ocrError}</span>
+                            </div>
+                        )}
+                    </div>
+                ) : mode === 'clipboard' ? (
                     filteredClips.length === 0 ? (
                         <div className="flex flex-col items-center justify-center h-48 text-zinc-500 text-xs">
                             <ClipboardList className="h-8 w-8 mb-2 opacity-30" />
@@ -789,14 +973,20 @@ export function QuickHubView(): React.ReactElement {
             {/* 底部按键提示栏 */}
             <div className="px-3.5 py-2 border-t border-white/10 bg-zinc-950/90 flex items-center justify-between text-[10px] text-zinc-400 shrink-0 font-mono">
                 <div className="flex items-center gap-3">
-                    <span><kbd className="px-1 py-0.5 rounded bg-zinc-800 text-zinc-300">↑↓</kbd> 切换光标</span>
-                    <span><kbd className="px-1 py-0.5 rounded bg-zinc-800 text-zinc-300">Enter</kbd> {mode === 'clipboard' ? '复制并填入' : '执行指令'}</span>
-                    {mode === 'command' && filteredCommands[selectedIndex]?.secondaryAction && (
-                        <span><kbd className="px-1 py-0.5 rounded bg-rose-950 text-rose-300 border border-rose-800/60">⌘⌫</kbd> Kill 释放端口</span>
-                    )}
-                    <span><kbd className="px-1 py-0.5 rounded bg-zinc-800 text-zinc-300">Tab</kbd> 切换模式</span>
-                    {mode === 'clipboard' && !query && (
-                        <span><kbd className="px-1 py-0.5 rounded bg-zinc-800 text-zinc-300">1-9</kbd> 快捷选用</span>
+                    {mode === 'ocr' ? (
+                        <span>识别完成后自动隐藏，切回原应用直接 <kbd className="px-1 py-0.5 rounded bg-zinc-800 text-zinc-300">⌘V</kbd> 粘贴</span>
+                    ) : (
+                    <>
+                        <span><kbd className="px-1 py-0.5 rounded bg-zinc-800 text-zinc-300">↑↓</kbd> 切换光标</span>
+                        <span><kbd className="px-1 py-0.5 rounded bg-zinc-800 text-zinc-300">Enter</kbd> {mode === 'clipboard' ? '复制并填入' : '执行指令'}</span>
+                        {mode === 'command' && filteredCommands[selectedIndex]?.secondaryAction && (
+                            <span><kbd className="px-1 py-0.5 rounded bg-rose-950 text-rose-300 border border-rose-800/60">⌘⌫</kbd> Kill 释放端口</span>
+                        )}
+                        <span><kbd className="px-1 py-0.5 rounded bg-zinc-800 text-zinc-300">Tab</kbd> 切换模式</span>
+                        {mode === 'clipboard' && !query && (
+                            <span><kbd className="px-1 py-0.5 rounded bg-zinc-800 text-zinc-300">1-9</kbd> 快捷选用</span>
+                        )}
+                    </>
                     )}
                 </div>
                 <div className="flex items-center gap-1">

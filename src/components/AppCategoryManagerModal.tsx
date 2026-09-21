@@ -172,6 +172,7 @@ ${lines}
                 messages: [{ role: 'user', content: prompt }],
                 maxTokens: 1500,
                 temperature: 0.1,
+                source: 'app-category',
             })
 
             const text = data.choices?.[0]?.message?.content || ''

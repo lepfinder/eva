@@ -53,7 +53,34 @@ fn tray_hide_receipt_window(app: tauri::AppHandle) {
 fn hub_hide(app: tauri::AppHandle) {
     if let Some(hub) = app.get_webview_window("hub") {
         hotkeys::LAST_HUB_MODE.store(0, Ordering::Relaxed);
+        hotkeys::HUB_PENDING_REVEAL.store(false, Ordering::Relaxed);
         let _ = hub.hide();
+    }
+}
+
+#[tauri::command]
+fn hub_get_mode() -> u8 {
+    hotkeys::LAST_HUB_MODE.load(Ordering::Relaxed)
+}
+
+/// Hide hub + main windows and hand focus back to the previously active app.
+/// Used after clipboard OCR so ⌘V lands in the user's target app, not EVA.
+#[tauri::command]
+fn hub_hide_all(app: tauri::AppHandle) {
+    if let Some(hub) = app.get_webview_window("hub") {
+        hotkeys::LAST_HUB_MODE.store(0, Ordering::Relaxed);
+        hotkeys::HUB_PENDING_REVEAL.store(false, Ordering::Relaxed);
+        let _ = hub.hide();
+    }
+    if let Some(main) = app.get_webview_window("main") {
+        let _ = main.hide();
+    }
+    if let Some(tray_win) = app.get_webview_window("tray-receipt") {
+        let _ = tray_win.hide();
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let _ = app.hide();
     }
 }
 
@@ -69,6 +96,7 @@ pub fn run() {
             if window.label() == "hub" {
                 if let WindowEvent::Focused(false) = event {
                     hotkeys::LAST_HUB_MODE.store(0, Ordering::Relaxed);
+                    hotkeys::HUB_PENDING_REVEAL.store(false, Ordering::Relaxed);
                     let _ = window.hide();
                 }
             }
@@ -215,6 +243,9 @@ pub fn run() {
             open_main_window,
             tray_hide_receipt_window,
             hub_hide,
+            hub_hide_all,
+            hub_get_mode,
+            hotkeys::hub_reveal,
             // Hotkeys
             hotkeys::hotkeys_get_all,
             hotkeys::hotkeys_save_all,
@@ -254,6 +285,11 @@ pub fn run() {
             http_server::http_server_test_connection,
             // AI Proxy
             ai::ai_chat_completion,
+            ai::ai_list_calls,
+            ai::ai_clear_calls,
+            ai::ai_get_call_by_hash,
+            ai::ai_ocr_hashes,
+            ai::ai_get_image_by_hash,
             // LocalPorts
             local_ports::get_listening_ports,
             local_ports::kill_process,
@@ -269,6 +305,8 @@ pub fn run() {
             clipboard::clipboard_delete_item,
             clipboard::clipboard_clear_all,
             clipboard::clipboard_write_to_clipboard,
+            clipboard::clipboard_get_current_image,
+            clipboard::clipboard_set_text,
             clipboard::clipboard_get_stats,
             clipboard::clipboard_get_daily_stats,
             clipboard::clipboard_get_image_data,

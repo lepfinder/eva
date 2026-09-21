@@ -148,6 +148,8 @@ const clipboardApi: Record<string, AnyFn> = {
   deleteItem: (id: string) => invoke('clipboard_delete_item', { id }),
   clearAll: () => invoke('clipboard_clear_all'),
   writeToClipboard: (id: string) => invoke('clipboard_write_to_clipboard', { id }),
+  getCurrentImage: () => invoke('clipboard_get_current_image'),
+  setText: (content: string) => invoke('clipboard_set_text', { content }),
   getStats: () => invoke('clipboard_get_stats'),
   getDailyStats: () => invoke('clipboard_get_daily_stats'),
   // Real-time push: listen for clipboard:newItem Tauri events
@@ -243,7 +245,15 @@ const aiApi: Record<string, AnyFn> = {
     messages: any
     maxTokens?: number
     temperature?: number
+    source?: string
+    imageHash?: string
+    enableThinking?: boolean
   }) => invoke('ai_chat_completion', { request }),
+  listCalls: (limit?: number, offset?: number) => invoke('ai_list_calls', { limit, offset }),
+  clearCalls: () => invoke('ai_clear_calls'),
+  getCallByHash: (hash: string) => invoke('ai_get_call_by_hash', { hash }),
+  ocrHashes: () => invoke('ai_ocr_hashes'),
+  getImageByHash: (hash: string) => invoke('ai_get_image_by_hash', { hash }),
 }
 
 // Global Hotkeys

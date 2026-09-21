@@ -5,14 +5,16 @@
  * - 模型可自定义
  * - 当前激活供应商也持久化
  */
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Separator } from '@/components/ui/separator'
 import { ExternalLink, Key, Cpu, Globe, CheckCircle2, AlertCircle, Loader2, Flame, Bot, Brain, Zap, Sparkles, type LucideIcon } from 'lucide-react'
+import { History, Trash2, RefreshCw, ChevronDown, ChevronRight, Copy, Check } from 'lucide-react'
 
 // ─── 供应商定义 ────────────────────────────────────────────────────────────────
 
@@ -69,7 +71,13 @@ export interface ProviderConfig {
   apiKey: string
   model: string
   baseUrl: string  // 允许用户覆盖
+  /** 多模态模型（剪贴板图片识别用），留空则回退到 model */
+  visionModel?: string
+  /** 图片识别指令，留空使用 DEFAULT_OCR_PROMPT */
+  ocrPrompt?: string
 }
+
+export const DEFAULT_OCR_PROMPT = '你是协助编码 Agent 理解截图的助手。请描述这张图片的基本结构与用途：1) 界面类型（网页/桌面应用/弹窗/报错页/终端等）；2) 布局区块及层级（导航、侧栏、主内容区、页脚等）；3) 关键 UI 组件及其位置与状态（按钮、输入框、表格、代码块、开关等）；4) 需要原样保留的关键文本（报错信息、字段标签、代码片段、URL 等）。输出简明的结构化描述，不要逐字转录全部内容。'
 
 function loadConfig(providerId: string, defaults: AiProvider): ProviderConfig {
   try {
@@ -149,6 +157,7 @@ export function AiProviderSettings() {
           model: cfg.model,
           messages: [{ role: 'user', content: 'hi' }],
           maxTokens: 5,
+          source: 'provider-test',
         })
         setTestStatus('ok')
         setTestMessage('连接成功')
@@ -289,6 +298,34 @@ export function AiProviderSettings() {
             </div>
           </div>
 
+          {/* VISION MODEL */}
+          <div className="space-y-2">
+            <Label className="uppercase text-xs tracking-widest text-muted-foreground">多模态模型（图片识别）</Label>
+            <div className="flex items-center gap-2">
+              <Brain className="h-4 w-4 text-muted-foreground shrink-0" />
+              <Input
+                value={cfg.visionModel || ''}
+                onChange={e => updateCfg({ visionModel: e.target.value })}
+                placeholder={`留空则使用当前模型：${cfg.model}`}
+                className="font-mono text-xs"
+              />
+            </div>
+            <p className="text-xs text-muted-foreground">
+              用于剪贴板图片 AI 识别（⌘⇧;），需支持 OpenAI vision 格式的模型，如 qwen-vl-max
+            </p>
+          </div>
+
+          {/* OCR PROMPT */}
+          <div className="space-y-2">
+            <Label className="uppercase text-xs tracking-widest text-muted-foreground">图片识别指令</Label>
+            <Input
+              value={cfg.ocrPrompt || ''}
+              onChange={e => updateCfg({ ocrPrompt: e.target.value })}
+              placeholder={DEFAULT_OCR_PROMPT}
+              className="text-xs"
+            />
+          </div>
+
           <Separator />
 
           {/* 操作按钮 */}
@@ -321,6 +358,254 @@ export function AiProviderSettings() {
 
         </CardContent>
       </Card>
+    </div>
+  )
+}
+
+// ─── AI 调用记录 ───────────────────────────────────────────────────────────────
+
+interface AiCallRecord {
+  id: number
+  createdAt: number
+  source: string
+  model: string
+  status: string
+  errorMsg: string
+  reqBytes: number
+  imageBytes: number
+  elapsedMs: number
+  prompt: string
+  response: string
+  promptTokens: number
+  completionTokens: number
+  totalTokens: number
+  imageHash: string
+}
+
+const SOURCE_LABELS: Record<string, string> = {
+  'ocr': '图片识别',
+  'provider-test': '连接测试',
+  'time-auditor': '时间审计',
+  'speech-bubble': '气泡提示',
+  'app-category': '应用分类',
+}
+
+function fmtBytes(n: number): string {
+  if (!n) return '-'
+  if (n < 1024) return `${n}B`
+  return `${(n / 1024).toFixed(0)}KB`
+}
+
+function fmtTime(ms: number): string {
+  const d = new Date(ms)
+  const pad = (x: number) => String(x).padStart(2, '0')
+  return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+}
+
+const PAGE_SIZE = 50
+
+export function AiCallHistory() {
+  const [calls, setCalls] = useState<AiCallRecord[]>([])
+  const [loading, setLoading] = useState(false)
+  const [hasMore, setHasMore] = useState(true)
+  const [expandedId, setExpandedId] = useState<number | null>(null)
+  const [copiedKey, setCopiedKey] = useState<string | null>(null)
+  const [imageCache, setImageCache] = useState<Record<string, string>>({})
+  const [lightboxHash, setLightboxHash] = useState<string | null>(null)
+  const sentinelRef = useRef<HTMLDivElement>(null)
+
+  const copyText = async (key: string, text: string) => {
+    try {
+      await navigator.clipboard.writeText(text)
+      setCopiedKey(key)
+      setTimeout(() => setCopiedKey(k => (k === key ? null : k)), 1500)
+    } catch { /* clipboard unavailable */ }
+  }
+
+  const load = useCallback(async (reset = false) => {
+    setLoading(true)
+    try {
+      const offset = reset ? 0 : calls.length
+      const rows = await window.api?.ai?.listCalls?.(PAGE_SIZE, offset)
+      const list: AiCallRecord[] = Array.isArray(rows) ? rows : []
+      setCalls(prev => (reset ? list : [...prev, ...list]))
+      setHasMore(list.length === PAGE_SIZE)
+    } catch {
+      if (reset) setCalls([])
+      setHasMore(false)
+    } finally {
+      setLoading(false)
+    }
+  }, [calls.length])
+
+  useEffect(() => { void load(true) }, [])
+
+  // 触底自动加载下一页
+  useEffect(() => {
+    const el = sentinelRef.current
+    if (!el) return
+    const observer = new IntersectionObserver(entries => {
+      if (entries[0].isIntersecting && hasMore && !loading) void load(false)
+    })
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [hasMore, loading, load])
+
+  // 展开带图记录时按需加载原图（ai-images 存档）
+  useEffect(() => {
+    const rec = expandedId == null ? undefined : calls.find(c => c.id === expandedId)
+    const hash = rec?.imageHash
+    if (!hash || hash in imageCache) return
+    let cancelled = false
+    window.api?.ai?.getImageByHash?.(hash)
+      .then((dataUrl: string | null) => {
+        if (!cancelled) setImageCache(prev => ({ ...prev, [hash]: dataUrl || '' }))
+      })
+      .catch(() => { if (!cancelled) setImageCache(prev => ({ ...prev, [hash]: '' })) })
+    return () => { cancelled = true }
+  }, [expandedId, calls, imageCache])
+
+  const clear = async () => {
+    try {
+      await window.api?.ai?.clearCalls?.()
+      setCalls([])
+      setHasMore(false)
+    } catch { /* keep list */ }
+  }
+
+  return (
+    <div className="space-y-6 animate-in fade-in duration-300">
+    <Card>
+      <CardHeader>
+        <div className="flex items-center justify-between">
+          <div>
+            <CardTitle className="flex items-center gap-2">
+              <History className="h-5 w-5" />
+              AI 调用记录
+            </CardTitle>
+            <CardDescription className="mt-1.5">
+              完整记录提示词、返回内容与 token 消耗，滚动到底自动加载更多。
+            </CardDescription>
+          </div>
+          <div className="flex items-center gap-1">
+            <Button variant="ghost" size="sm" onClick={() => void load(true)} disabled={loading} className="gap-1.5 text-xs text-muted-foreground">
+              {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+              刷新
+            </Button>
+            <Button variant="ghost" size="sm" onClick={clear} disabled={calls.length === 0} className="gap-1.5 text-xs text-muted-foreground hover:text-destructive">
+              <Trash2 className="h-3.5 w-3.5" />
+              清空
+            </Button>
+          </div>
+        </div>
+      </CardHeader>
+      <CardContent>
+        {calls.length === 0 && !loading ? (
+          <p className="text-sm text-muted-foreground">暂无调用记录。</p>
+        ) : (
+          <div className="divide-y divide-border">
+            {calls.map(c => {
+              const expanded = expandedId === c.id
+              return (
+                <div key={c.id}>
+                  <button
+                    type="button"
+                    onClick={() => setExpandedId(expanded ? null : c.id)}
+                    className="w-full flex items-center gap-3 py-2 text-left text-xs hover:bg-muted/50 rounded-md px-1"
+                  >
+                    {expanded
+                      ? <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                      : <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />}
+                    <span className="font-mono text-muted-foreground shrink-0">{fmtTime(c.createdAt)}</span>
+                    <span className="shrink-0">{SOURCE_LABELS[c.source] || c.source || '未知'}</span>
+                    <span className="font-mono truncate text-muted-foreground">{c.model}</span>
+                    <span className="ml-auto flex items-center gap-3 shrink-0 text-muted-foreground">
+                      <span>{c.imageBytes ? `图 ${fmtBytes(c.imageBytes)} · ` : ''}{fmtBytes(c.reqBytes)}</span>
+                      <span>{c.totalTokens ? `${c.promptTokens}/${c.completionTokens} tok` : '-'}</span>
+                      <span>{c.elapsedMs}ms</span>
+                      {c.status === 'ok'
+                        ? <CheckCircle2 className="h-3.5 w-3.5 text-green-600" />
+                        : <AlertCircle className="h-3.5 w-3.5 text-destructive" />}
+                    </span>
+                  </button>
+                  {expanded && (
+                    <div className="space-y-3 pb-3 px-1 pl-6">
+                      {c.errorMsg && (
+                        <div>
+                          <p className="text-xs text-muted-foreground mb-1">错误</p>
+                          <p className="text-xs font-mono text-destructive whitespace-pre-wrap break-all">{c.errorMsg}</p>
+                        </div>
+                      )}
+                      {c.imageHash && imageCache[c.imageHash] && (
+                        <div>
+                          <p className="text-xs text-muted-foreground mb-1">原图</p>
+                          <img
+                            src={imageCache[c.imageHash]}
+                            alt="识别原图"
+                            onClick={() => setLightboxHash(c.imageHash)}
+                            className="max-h-40 rounded-md border border-border cursor-zoom-in"
+                          />
+                        </div>
+                      )}
+                      {c.prompt && (
+                        <div>
+                          <p className="text-xs text-muted-foreground mb-1">提示词</p>
+                          <div className="max-h-48 overflow-y-auto rounded-md bg-muted/50 p-3">
+                            <p className="text-xs font-mono whitespace-pre-wrap break-all">{c.prompt}</p>
+                          </div>
+                        </div>
+                      )}
+                      {c.response && (
+                        <div>
+                          <div className="mb-1 flex items-center justify-between">
+                            <p className="text-xs text-muted-foreground">返回内容</p>
+                            <button
+                              type="button"
+                              onClick={() => void copyText(`resp-${c.id}`, c.response)}
+                              className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground px-1.5 py-0.5 rounded transition-colors"
+                            >
+                              {copiedKey === `resp-${c.id}`
+                                ? <><Check className="h-3 w-3 text-green-600" />已复制</>
+                                : <><Copy className="h-3 w-3" />复制</>}
+                            </button>
+                          </div>
+                          <div className="max-h-64 overflow-y-auto rounded-md bg-muted/50 p-3">
+                            <p className="text-xs font-mono whitespace-pre-wrap break-all">{c.response}</p>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        )}
+        {calls.length > 0 && (
+          <div ref={sentinelRef} className="flex items-center justify-center py-3 text-xs text-muted-foreground">
+            {loading && <><Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" />加载中…</>}
+            {!loading && !hasMore && '已加载全部'}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+
+    <Dialog open={!!lightboxHash} onOpenChange={open => { if (!open) setLightboxHash(null) }}>
+      <DialogContent className="max-w-[min(96vw,1100px)] w-full gap-3 p-4 sm:rounded-xl">
+        <DialogHeader className="pr-8 text-left">
+          <DialogTitle className="text-base">原图预览</DialogTitle>
+        </DialogHeader>
+        {lightboxHash && imageCache[lightboxHash] && (
+          <div className="flex max-h-[min(78vh,820px)] items-center justify-center overflow-auto rounded-lg bg-muted/50 p-2">
+            <img
+              src={imageCache[lightboxHash]}
+              alt="识别原图"
+              className="max-h-[min(76vh,800px)] w-auto max-w-full object-contain"
+            />
+          </div>
+        )}
+      </DialogContent>
+    </Dialog>
     </div>
   )
 }
