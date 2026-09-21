@@ -66,6 +66,7 @@ export const AI_PROVIDERS: AiProvider[] = [
 
 const LS_ACTIVE = 'eva:ai:activeProvider'
 const lsKey = (providerId: string) => `eva:ai:provider:${providerId}`
+const lsModelsKey = (providerId: string) => `eva:ai:models:${providerId}`
 
 export interface ProviderConfig {
   apiKey: string
@@ -110,8 +111,30 @@ export function AiProviderSettings() {
   const [testStatus, setTestStatus] = useState<TestStatus>('idle')
   const [testMessage, setTestMessage] = useState('')
 
+  // 远端拉取的模型列表（按 provider 缓存到 localStorage）
+  const [fetchedModels, setFetchedModels] = useState<Record<string, string[]>>(() => {
+    const initial: Record<string, string[]> = {}
+    AI_PROVIDERS.forEach(p => {
+      try {
+        const raw = localStorage.getItem(lsModelsKey(p.id))
+        if (raw) {
+          const arr = JSON.parse(raw)
+          if (Array.isArray(arr)) initial[p.id] = arr.filter((m: unknown) => typeof m === 'string' && m)
+        }
+      } catch { }
+    })
+    return initial
+  })
+  const [modelsLoading, setModelsLoading] = useState(false)
+  const [modelsError, setModelsError] = useState('')
+  const [modelSearch, setModelSearch] = useState('')
+
   const provider = AI_PROVIDERS.find(p => p.id === activeId)!
   const cfg = configs[activeId]
+  const remoteModels = fetchedModels[activeId]
+  const filteredRemote = remoteModels
+    ? remoteModels.filter(m => m.toLowerCase().includes(modelSearch.toLowerCase()))
+    : null
 
   // 切换供应商时持久化选择
   const handleSwitchProvider = (id: string) => {
@@ -119,10 +142,33 @@ export function AiProviderSettings() {
     localStorage.setItem(LS_ACTIVE, id)
     setTestStatus('idle')
     setTestMessage('')
+    setModelSearch('')
+    setModelsError('')
   }
 
   const updateCfg = (patch: Partial<ProviderConfig>) => {
     setConfigs(prev => ({ ...prev, [activeId]: { ...prev[activeId], ...patch } }))
+  }
+
+  // 拉取远端模型列表；失败时保留内置列表兜底
+  const fetchModels = async () => {
+    if (!cfg.apiKey.trim() || modelsLoading) return
+    setModelsLoading(true)
+    setModelsError('')
+    try {
+      const list = await window.api.ai.listModels(cfg.baseUrl, cfg.apiKey)
+      const arr = Array.isArray(list) ? list.filter(m => typeof m === 'string' && m) : []
+      if (arr.length === 0) {
+        setModelsError('接口未返回模型列表')
+        return
+      }
+      setFetchedModels(prev => ({ ...prev, [activeId]: arr }))
+      localStorage.setItem(lsModelsKey(activeId), JSON.stringify(arr))
+    } catch (e) {
+      setModelsError(String((e as Error)?.message || e || '拉取失败'))
+    } finally {
+      setModelsLoading(false)
+    }
   }
 
   const handleSave = () => {
@@ -270,11 +316,33 @@ export function AiProviderSettings() {
 
           {/* MODEL */}
           <div className="space-y-2">
-            <Label className="uppercase text-xs tracking-widest text-muted-foreground">模型</Label>
+            <div className="flex items-center justify-between">
+              <Label className="uppercase text-xs tracking-widest text-muted-foreground">模型</Label>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={fetchModels}
+                disabled={!cfg.apiKey.trim() || modelsLoading}
+                className="h-6 gap-1 px-2 text-xs text-muted-foreground"
+              >
+                {modelsLoading
+                  ? <Loader2 className="h-3 w-3 animate-spin" />
+                  : <RefreshCw className="h-3 w-3" />}
+                拉取模型列表
+              </Button>
+            </div>
             <div className="space-y-2">
-              {/* 快速选择常用模型 */}
-              <div className="flex flex-wrap gap-1.5">
-                {provider.models.map(m => (
+              {remoteModels && (
+                <Input
+                  value={modelSearch}
+                  onChange={e => setModelSearch(e.target.value)}
+                  placeholder={`搜索模型（共 ${remoteModels.length} 个）`}
+                  className="text-xs"
+                />
+              )}
+              {/* 快速选择：远端列表优先，未拉取/失败时用内置列表 */}
+              <div className={`flex flex-wrap gap-1.5 ${remoteModels ? 'max-h-40 overflow-y-auto' : ''}`}>
+                {(filteredRemote ?? provider.models).map(m => (
                   <button
                     key={m}
                     type="button"
@@ -287,7 +355,13 @@ export function AiProviderSettings() {
                     {m}
                   </button>
                 ))}
+                {remoteModels && filteredRemote!.length === 0 && (
+                  <span className="text-xs text-muted-foreground">无匹配模型</span>
+                )}
               </div>
+              {modelsError && (
+                <p className="text-xs text-destructive">{modelsError}，已显示内置列表</p>
+              )}
               {/* 自定义输入 */}
               <Input
                 value={cfg.model}

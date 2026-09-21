@@ -249,6 +249,8 @@ const aiApi: Record<string, AnyFn> = {
     imageHash?: string
     enableThinking?: boolean
   }) => invoke('ai_chat_completion', { request }),
+  listModels: (baseUrl: string, apiKey: string) =>
+    invoke<string[]>('ai_list_models', { request: { baseUrl, apiKey } }),
   listCalls: (limit?: number, offset?: number) => invoke('ai_list_calls', { limit, offset }),
   clearCalls: () => invoke('ai_clear_calls'),
   getCallByHash: (hash: string) => invoke('ai_get_call_by_hash', { hash }),

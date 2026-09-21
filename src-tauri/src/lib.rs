@@ -285,6 +285,7 @@ pub fn run() {
             http_server::http_server_test_connection,
             // AI Proxy
             ai::ai_chat_completion,
+            ai::ai_list_models,
             ai::ai_list_calls,
             ai::ai_clear_calls,
             ai::ai_get_call_by_hash,

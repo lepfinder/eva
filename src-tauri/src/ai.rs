@@ -22,6 +22,13 @@ pub struct AiChatRequest {
     pub enable_thinking: Option<bool>,
 }
 
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct AiListModelsRequest {
+    pub base_url: String,
+    pub api_key: String,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AiCallRecord {
@@ -407,4 +414,53 @@ pub async fn ai_chat_completion(
             Err(format!("响应 JSON 解析失败: {}", e))
         }
     }
+}
+
+/// Fetch the model list from an OpenAI-compatible provider (GET {base_url}/models).
+#[tauri::command]
+pub async fn ai_list_models(request: AiListModelsRequest) -> Result<Vec<String>, String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let base = request.base_url.trim_end_matches('/');
+    let url = format!("{}/models", base);
+    let resp = client
+        .get(&url)
+        .header("Authorization", format!("Bearer {}", request.api_key.trim()))
+        .send()
+        .await
+        .map_err(|e| format!("网络请求失败: {}", e))?;
+    let status = resp.status();
+    let text = resp.text().await.unwrap_or_default();
+    if !status.is_success() {
+        let mut err_msg = text.clone();
+        if let Ok(err_val) = serde_json::from_str::<serde_json::Value>(&text) {
+            if let Some(msg) = err_val
+                .get("error")
+                .and_then(|e| e.get("message"))
+                .and_then(|m| m.as_str())
+            {
+                err_msg = msg.to_string();
+            }
+        }
+        log::error!("[AI] list_models failed base={} status={}", base, status.as_u16());
+        return Err(format!("HTTP {}: {}", status.as_u16(), err_msg));
+    }
+    let val: serde_json::Value =
+        serde_json::from_str(&text).map_err(|e| format!("响应解析失败: {}", e))?;
+    let mut models: Vec<String> = val
+        .get("data")
+        .and_then(|d| d.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|m| m.get("id").and_then(|id| id.as_str()))
+                .map(|s| s.to_string())
+                .collect()
+        })
+        .unwrap_or_default();
+    models.sort();
+    models.dedup();
+    log::info!("[AI] list_models ok base={} count={}", base, models.len());
+    Ok(models)
 }
