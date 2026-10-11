@@ -622,6 +622,75 @@ fn header_value(request: &tiny_http::Request, name: &str) -> Option<String> {
         .map(|h| h.value.as_str().to_string())
 }
 
+fn piclist_success(urls: &[(String, String, Option<i64>, Option<i64>)]) -> Response<std::io::Cursor<Vec<u8>>> {
+    let result: Vec<&str> = urls.iter().map(|(u, _, _, _)| u.as_str()).collect();
+    let full_result: Vec<serde_json::Value> = urls
+        .iter()
+        .map(|(url, filename, width, height)| {
+            serde_json::json!({
+                "imgUrl": url,
+                "url": url,
+                "fileName": filename,
+                "width": width,
+                "height": height,
+                "type": "aliyun",
+            })
+        })
+        .collect();
+    json_response(
+        &serde_json::json!({
+            "success": true,
+            "result": result,
+            "fullResult": full_result,
+            "message": "success",
+        }),
+        200,
+    )
+}
+
+fn piclist_fail(message: &str, status: u16) -> Response<std::io::Cursor<Vec<u8>>> {
+    json_response(
+        &serde_json::json!({
+            "success": false,
+            "result": [],
+            "fullResult": [],
+            "message": message,
+        }),
+        status,
+    )
+}
+
+fn upload_one_bytes(
+    user_data_dir: &Path,
+    data: &[u8],
+    filename: &str,
+    width: Option<i64>,
+    height: Option<i64>,
+) -> Result<(String, String, Option<i64>, Option<i64>), String> {
+    let (url, _key) = cdn::upload_bytes(user_data_dir, data, filename)?;
+    cdn::ingest_after_upload(
+        user_data_dir,
+        &url,
+        None,
+        filename,
+        Some(data.len() as i64),
+    );
+    Ok((url, filename.to_string(), width, height))
+}
+
+fn upload_from_clipboard(user_data_dir: &Path) -> Result<(String, String, Option<i64>, Option<i64>), String> {
+    let (png, w, h) = clipboard::read_clipboard_image_png()
+        .ok_or_else(|| "剪贴板没有图片（PicList 空 body 模式需要系统剪贴板图片）".to_string())?;
+    let filename = format!(
+        "clipboard_{}.png",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0)
+    );
+    upload_one_bytes(user_data_dir, &png, &filename, Some(w as i64), Some(h as i64))
+}
+
 fn handle_piclist_upload(
     request: &mut tiny_http::Request,
     user_data_dir: &Path,
@@ -634,102 +703,80 @@ fn handle_piclist_upload(
     let content_type = header_value(request, "Content-Type").unwrap_or_default();
     let mut body = Vec::new();
     if let Err(e) = request.as_reader().read_to_end(&mut body) {
-        return error_response(&format!("Failed to read body: {}", e), 400);
+        return piclist_fail(&format!("Failed to read body: {}", e), 400);
     }
 
-    let mut urls: Vec<String> = Vec::new();
+    let ct_lower = content_type.to_ascii_lowercase();
 
-    if content_type.to_ascii_lowercase().starts_with("multipart/form-data") {
-        match cdn::parse_multipart(&body, &content_type) {
-            Ok(file) => {
-                match cdn::upload_bytes(user_data_dir, &file.data, &file.filename) {
-                    Ok((url, _key)) => {
-                        cdn::ingest_after_upload(
-                            user_data_dir,
-                            &url,
-                            None,
-                            &file.filename,
-                            Some(file.data.len() as i64),
-                        );
-                        urls.push(url);
-                    }
-                    Err(e) => {
-                        return json_response(
-                            &serde_json::json!({
-                                "success": false,
-                                "result": [],
-                                "message": e,
-                            }),
-                            500,
-                        );
-                    }
-                }
+    // Multipart: fields image / file / list (Obsidian remoteServerMode)
+    if ct_lower.starts_with("multipart/form-data") {
+        return match cdn::parse_multipart(&body, &content_type) {
+            Ok(file) => match upload_one_bytes(user_data_dir, &file.data, &file.filename, None, None) {
+                Ok(item) => piclist_success(&[item]),
+                Err(e) => piclist_fail(&e, 500),
+            },
+            Err(e) => piclist_fail(&e, 400),
+        };
+    }
+
+    // Empty body (Obsidian remoteServerMode:false) → clipboard, like PicList
+    let body_trim = {
+        let s = String::from_utf8_lossy(&body);
+        s.trim().to_string()
+    };
+    if body_trim.is_empty() {
+        return match upload_from_clipboard(user_data_dir) {
+            Ok(item) => piclist_success(&[item]),
+            Err(e) => piclist_fail(&e, 400),
+        };
+    }
+
+    // JSON: {"list":["/abs/path.png"]} or raw array; empty list → clipboard
+    #[derive(Deserialize)]
+    struct UploadList {
+        list: Vec<String>,
+    }
+    let paths: Vec<String> = if let Ok(parsed) = serde_json::from_str::<UploadList>(&body_trim) {
+        parsed.list
+    } else if let Ok(arr) = serde_json::from_str::<Vec<String>>(&body_trim) {
+        arr
+    } else {
+        return piclist_fail(
+            "Expected empty body (clipboard), JSON {\"list\":[\"/path\"]}, or multipart image/file/list",
+            400,
+        );
+    };
+
+    if paths.is_empty() {
+        return match upload_from_clipboard(user_data_dir) {
+            Ok(item) => piclist_success(&[item]),
+            Err(e) => piclist_fail(&e, 400),
+        };
+    }
+
+    let mut uploaded = Vec::new();
+    for p in paths {
+        match cdn::upload_path(user_data_dir, Path::new(&p)) {
+            Ok((url, _key, filename)) => {
+                let size = std::fs::metadata(&p).ok().map(|m| m.len() as i64);
+                cdn::ingest_after_upload(user_data_dir, &url, Some(&p), &filename, size);
+                let (w, h) = match image::image_dimensions(Path::new(&p)) {
+                    Ok((ww, hh)) => (Some(ww as i64), Some(hh as i64)),
+                    Err(_) => (None, None),
+                };
+                uploaded.push((url, filename, w, h));
             }
             Err(e) => {
-                return json_response(
-                    &serde_json::json!({
-                        "success": false,
-                        "result": [],
-                        "message": e,
-                    }),
-                    400,
-                );
-            }
-        }
-    } else {
-        // JSON: {"list":["/abs/path.png"]}  (also accept raw array)
-        let body_str = String::from_utf8_lossy(&body);
-        #[derive(Deserialize)]
-        struct UploadList {
-            list: Vec<String>,
-        }
-        let paths: Vec<String> = if let Ok(parsed) = serde_json::from_str::<UploadList>(&body_str) {
-            parsed.list
-        } else if let Ok(arr) = serde_json::from_str::<Vec<String>>(&body_str) {
-            arr
-        } else {
-            return json_response(
-                &serde_json::json!({
-                    "success": false,
-                    "result": [],
-                    "message": "Expected JSON {\"list\":[\"/path\"]} or multipart image/file",
-                }),
-                400,
-            );
-        };
-
-        for p in paths {
-            match cdn::upload_path(user_data_dir, Path::new(&p)) {
-                Ok((url, _key, filename)) => {
-                    let size = std::fs::metadata(&p).ok().map(|m| m.len() as i64);
-                    cdn::ingest_after_upload(user_data_dir, &url, Some(&p), &filename, size);
-                    urls.push(url);
-                }
-                Err(e) => {
-                    return json_response(
-                        &serde_json::json!({
-                            "success": false,
-                            "result": urls,
-                            "message": format!("{}: {}", p, e),
-                        }),
-                        500,
-                    );
-                }
+                return piclist_fail(&format!("{}: {}", p, e), 500);
             }
         }
     }
 
-    json_response(
-        &serde_json::json!({
-            "success": true,
-            "result": urls,
-            "message": "success",
-        }),
-        200,
-    )
+    piclist_success(&uploaded)
 }
 
 // ──────────────────────────────────────────────────
+// Lifecycle & Management
 // Lifecycle & Management
 // ──────────────────────────────────────────────────
 

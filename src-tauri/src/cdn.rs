@@ -888,13 +888,13 @@ pub fn parse_multipart(body: &[u8], content_type: &str) -> Result<MultipartFile,
         }
     }
 
-    if let Some(f) = candidates
-        .into_iter()
-        .find(|c| c.field == "image" || c.field == "file")
-    {
+    // Prefer image/file; also accept "list" (Obsidian remoteServerMode FormData field).
+    if let Some(f) = candidates.into_iter().find(|c| {
+        matches!(c.field.as_str(), "image" | "file" | "list") && !c.data.is_empty()
+    }) {
         return Ok(f);
     }
-    Err("未找到 multipart 字段 image/file".into())
+    Err("未找到 multipart 字段 image/file/list".into())
 }
 
 fn find_subslice(hay: &[u8], needle: &[u8]) -> Option<usize> {
@@ -1037,6 +1037,21 @@ PNGDATA\r\n\
         assert_eq!(f.field, "image");
         assert_eq!(f.filename, "x.png");
         assert_eq!(f.data, b"PNGDATA");
+    }
+
+    #[test]
+    fn multipart_list_field() {
+        let body = b"\
+--bound\r\n\
+Content-Disposition: form-data; name=\"list\"; filename=\"y.jpg\"\r\n\
+Content-Type: image/jpeg\r\n\
+\r\n\
+JPEGDATA\r\n\
+--bound--\r\n";
+        let f = parse_multipart(body, "multipart/form-data; boundary=bound").unwrap();
+        assert_eq!(f.field, "list");
+        assert_eq!(f.filename, "y.jpg");
+        assert_eq!(f.data, b"JPEGDATA");
     }
 
     #[test]

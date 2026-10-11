@@ -514,6 +514,21 @@ fn encode_clipboard_image_png(img: &arboard::ImageData) -> Vec<u8> {
     png_bytes
 }
 
+/// Read the system clipboard image as PNG bytes (PicList-compatible empty /upload).
+/// Returns (png_bytes, width, height) or None if clipboard has no image.
+pub fn read_clipboard_image_png() -> Option<(Vec<u8>, u32, u32)> {
+    let mut cb = Clipboard::new().ok()?;
+    let img = cb.get_image().ok()?;
+    let width = img.width as u32;
+    let height = img.height as u32;
+    let png_data = encode_clipboard_image_png(&img);
+    if png_data.is_empty() {
+        None
+    } else {
+        Some((png_data, width, height))
+    }
+}
+
 fn hash_clipboard_image(cb: &mut Clipboard) -> Option<String> {
     let img = cb.get_image().ok()?;
     let png_data = encode_clipboard_image_png(&img);
