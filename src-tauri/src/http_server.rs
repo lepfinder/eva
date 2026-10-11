@@ -2,6 +2,7 @@ use crate::activity_tracker;
 use crate::clipboard;
 use crate::env_detector;
 use crate::local_ports;
+use crate::media_assets;
 use crate::memory_analyzer;
 use crate::visual_recall;
 use rusqlite::Connection;
@@ -115,7 +116,7 @@ fn json_response<T: Serialize>(data: &T, status_code: u16) -> Response<std::io::
     let mut resp = Response::from_data(body).with_status_code(StatusCode(status_code));
     resp.add_header(Header::from_bytes(&b"Content-Type"[..], &b"application/json; charset=utf-8"[..]).unwrap());
     resp.add_header(Header::from_bytes(&b"Access-Control-Allow-Origin"[..], &b"*"[..]).unwrap());
-    resp.add_header(Header::from_bytes(&b"Access-Control-Allow-Methods"[..], &b"GET, POST, OPTIONS"[..]).unwrap());
+    resp.add_header(Header::from_bytes(&b"Access-Control-Allow-Methods"[..], &b"GET, POST, PATCH, OPTIONS"[..]).unwrap());
     resp.add_header(Header::from_bytes(&b"Access-Control-Allow-Headers"[..], &b"Authorization, Content-Type"[..]).unwrap());
     resp.add_header(Header::from_bytes(&b"Access-Control-Allow-Private-Network"[..], &b"true"[..]).unwrap());
     resp
@@ -168,7 +169,7 @@ fn start_server_thread(
             if method == Method::Options {
                 let mut resp = Response::from_string("").with_status_code(StatusCode(200));
                 resp.add_header(Header::from_bytes(&b"Access-Control-Allow-Origin"[..], &b"*"[..]).unwrap());
-                resp.add_header(Header::from_bytes(&b"Access-Control-Allow-Methods"[..], &b"GET, POST, OPTIONS"[..]).unwrap());
+                resp.add_header(Header::from_bytes(&b"Access-Control-Allow-Methods"[..], &b"GET, POST, PATCH, OPTIONS"[..]).unwrap());
                 resp.add_header(Header::from_bytes(&b"Access-Control-Allow-Headers"[..], &b"Authorization, Content-Type"[..]).unwrap());
                 resp.add_header(Header::from_bytes(&b"Access-Control-Allow-Private-Network"[..], &b"true"[..]).unwrap());
                 let _ = request.respond(resp);
@@ -237,7 +238,7 @@ fn start_server_thread(
             }
 
             // Route Handlers
-            match (method, path) {
+            match (method.clone(), path) {
                 // 1. Context Snapshot
                 (Method::Get, "/api/context") => {
                     let active = activity_tracker::get_active_window().map(|(app, title, proj)| {
@@ -480,7 +481,116 @@ fn start_server_thread(
                     let _ = request.respond(json_response(&snapshots, 200));
                 }
 
+                // 14. Media Assets: Ingest
+                (Method::Post, "/api/assets/ingest") => {
+                    let mut body_str = String::new();
+                    let _ = request.as_reader().read_to_string(&mut body_str);
+                    match serde_json::from_str::<media_assets::IngestRequest>(&body_str) {
+                        Ok(payload) => match media_assets::ingest_asset(&user_data_dir, payload) {
+                            Ok(result) => {
+                                let code = if result.created { 201 } else { 200 };
+                                let _ = request.respond(json_response(&result, code));
+                            }
+                            Err(e) => {
+                                let _ = request.respond(error_response(&e, 400));
+                            }
+                        },
+                        Err(e) => {
+                            let _ = request.respond(error_response(
+                                &format!("Invalid JSON body: {}", e),
+                                400,
+                            ));
+                        }
+                    }
+                }
+
+                // 15. Media Assets: List
+                (Method::Get, "/api/assets") | (Method::Get, "/api/assets/list") => {
+                    let limit: i64 = query_map.get("limit").and_then(|l| l.parse().ok()).unwrap_or(60);
+                    let offset: i64 = query_map.get("offset").and_then(|o| o.parse().ok()).unwrap_or(0);
+                    let q = query_map.get("q").map(|s| s.as_str());
+                    let media_kind = query_map
+                        .get("mediaKind")
+                        .or_else(|| query_map.get("kind"))
+                        .map(|s| s.as_str());
+                    let favorite_only = query_map
+                        .get("favorite")
+                        .map(|s| s == "1" || s.eq_ignore_ascii_case("true"))
+                        .unwrap_or(false);
+                    let tag = query_map.get("tag").map(|s| s.as_str());
+                    match media_assets::list_assets(
+                        &user_data_dir,
+                        limit,
+                        offset,
+                        q,
+                        media_kind,
+                        favorite_only,
+                        tag,
+                    ) {
+                        Ok(result) => {
+                            let _ = request.respond(json_response(&result, 200));
+                        }
+                        Err(e) => {
+                            let _ = request.respond(error_response(&e, 500));
+                        }
+                    }
+                }
+
+                // 16. Media Assets: Tags
+                (Method::Get, "/api/assets/tags") => {
+                    match media_assets::list_all_tags(&user_data_dir) {
+                        Ok(tags) => {
+                            let _ = request.respond(json_response(&tags, 200));
+                        }
+                        Err(e) => {
+                            let _ = request.respond(error_response(&e, 500));
+                        }
+                    }
+                }
+
                 _ => {
+                    // Dynamic: GET/PATCH /api/assets/:id
+                    if path.starts_with("/api/assets/") {
+                        let id = path.trim_start_matches("/api/assets/");
+                        if !id.is_empty() && !id.contains('/') {
+                            if method == Method::Get {
+                                match media_assets::get_asset(&user_data_dir, id) {
+                                    Ok(Some(asset)) => {
+                                        let _ = request.respond(json_response(&asset, 200));
+                                    }
+                                    Ok(None) => {
+                                        let _ = request.respond(error_response("Asset not found", 404));
+                                    }
+                                    Err(e) => {
+                                        let _ = request.respond(error_response(&e, 500));
+                                    }
+                                }
+                                continue;
+                            }
+                            if method == Method::Patch {
+                                let mut body_str = String::new();
+                                let _ = request.as_reader().read_to_string(&mut body_str);
+                                match serde_json::from_str::<media_assets::UpdateAssetRequest>(&body_str) {
+                                    Ok(payload) => match media_assets::update_asset(&user_data_dir, id, payload) {
+                                        Ok(asset) => {
+                                            let _ = request.respond(json_response(&asset, 200));
+                                        }
+                                        Err(e) => {
+                                            let code = if e.contains("not found") { 404 } else { 400 };
+                                            let _ = request.respond(error_response(&e, code));
+                                        }
+                                    },
+                                    Err(e) => {
+                                        let _ = request.respond(error_response(
+                                            &format!("Invalid JSON body: {}", e),
+                                            400,
+                                        ));
+                                    }
+                                }
+                                continue;
+                            }
+                        }
+                    }
                     let _ = request.respond(error_response("Endpoint not found", 404));
                 }
             }

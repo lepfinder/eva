@@ -5,6 +5,7 @@ pub mod env_detector;
 pub mod hotkeys;
 pub mod http_server;
 pub mod local_ports;
+pub mod media_assets;
 pub mod memory_analyzer;
 pub mod navigation;
 pub mod settings;
@@ -138,6 +139,10 @@ pub fn run() {
             // Initialise visual recall
             let vr_state = visual_recall::init(app.handle());
             app.manage(vr_state);
+
+            // Initialise media assets library
+            let media_assets_state = media_assets::init(app.handle());
+            app.manage(media_assets_state);
 
             // Initialise local HTTP API server
             let http_state = http_server::init(app.handle());
@@ -353,6 +358,12 @@ pub fn run() {
             visual_recall::visual_recall_get_image_data,
             visual_recall::visual_recall_check_permission,
             visual_recall::visual_recall_request_permission,
+            // MediaAssets
+            media_assets::media_assets_list,
+            media_assets::media_assets_get,
+            media_assets::media_assets_ingest,
+            media_assets::media_assets_update,
+            media_assets::media_assets_list_tags,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

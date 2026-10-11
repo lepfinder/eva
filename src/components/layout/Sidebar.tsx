@@ -14,6 +14,7 @@ import {
   Radio,
   Activity,
   SearchCode,
+  Images,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
@@ -33,6 +34,7 @@ export type NavItem =
   | 'clipboard'
   | 'timeauditor'
   | 'visualrecall'
+  | 'mediaassets'
   | 'settings'
 
 interface SidebarProps {
@@ -64,6 +66,12 @@ const navGroups = [
       { id: 'timeauditor', labelKey: 'nav.timeauditor', icon: <Timer className="h-5 w-5" /> },
       { id: 'visualrecall', labelKey: 'nav.visualrecall', icon: <MonitorPlay className="h-5 w-5" /> },
       { id: 'vault', labelKey: 'nav.vault', icon: <Lock className="h-5 w-5" /> }
+    ]
+  },
+  {
+    title: 'LIBRARY',
+    items: [
+      { id: 'mediaassets', labelKey: 'nav.mediaassets', icon: <Images className="h-5 w-5" /> }
     ]
   }
 ]
