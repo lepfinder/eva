@@ -23,7 +23,7 @@
 
 ### Phase B（已实现）
 
-- 极简阿里云 OSS 图床（密钥进钥匙串）+ 设置页「图床 CDN」
+- 极简阿里云 OSS 图床（密钥进钥匙串）+ 设置页「图床」
 - PicList 兼容 `POST/OPTIONS /upload`（JSON `list` + multipart `image`/`file`）
 - 额外监听 **36677**（可关）；亦挂在 **14220**
 - 上传成功自动 ingest（`source=eva-upload`）
@@ -158,7 +158,7 @@ EVA 内置阿里云 OSS 直传，暴露与 PicList 兼容的本地上传口，�
 
 - 非密钥：`userData/cdn_config.json`（provider / bucket / area / pathPrefix / customUrl / piclistCompat*）
 - 密钥：macOS Keychain `com.xiyangxie.eva.cdn` / `aliyun-access-key-secret`（失败时回落 `userData/.cdn_aliyun_secret`，权限 600，已 gitignore）
-- UI：设置 → **图床 CDN**（掩码展示、测试连接、从 PicList `data.json` 导入）
+- UI：设置 → **图床**（掩码展示、测试连接、从 PicList `data.json` 导入）
 
 ### HTTP
 

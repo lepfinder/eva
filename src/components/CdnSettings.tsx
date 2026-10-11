@@ -152,7 +152,7 @@ export function CdnSettings(): React.ReactElement {
       <div>
         <h3 className="text-base font-bold flex items-center gap-2">
           <CloudUpload className="h-5 w-5 text-primary" />
-          图床 / CDN
+          图床
         </h3>
         <p className="text-xs text-muted-foreground mt-1">
           极简阿里云 OSS 上传；提供与 PicList 兼容的 <code className="font-mono">POST /upload</code>。

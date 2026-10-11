@@ -452,7 +452,7 @@ export function SettingsPage(): React.ReactElement {
     { id: 'ai', label: 'AI 供应商', icon: <Sparkles className="h-4 w-4" /> },
     { id: 'ai-history', label: '调用记录', icon: <History className="h-4 w-4" /> },
     { id: 'api', label: 'API 服务', icon: <Radio className="h-4 w-4" /> },
-    { id: 'cdn', label: '图床 CDN', icon: <CloudUpload className="h-4 w-4" /> },
+    { id: 'cdn', label: '图床', icon: <CloudUpload className="h-4 w-4" /> },
     { id: 'hotkeys', label: '全局快捷键', icon: <Keyboard className="h-4 w-4" /> },
     { id: 'network', label: '网络代理', icon: <Wifi className="h-4 w-4" /> },
     { id: 'storage', label: '存储管理', icon: <HardDrive className="h-4 w-4" /> },
