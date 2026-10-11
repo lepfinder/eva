@@ -108,12 +108,17 @@ PATCH 可改 `filename` / `prompt` / `notes` / `favorite` / `mediaKind` / 标签
 
 ## 4. PicList 联调
 
-1. 复制 `scripts/piclist/on-upload-success.mjs`
-2. 在 `scripts/.env` 写 `EVA_TOKEN=...`（与 EVA「设置 → API 服务」一致，默认 `eva-local-token`）
-3. PicList → 设置 → 上传后脚本 / `onUploadSuccess`：指向该 `.mjs`
-4. Obsidian → PicList（`127.0.0.1:36677`）HTTP 上传应触发钩子；用 curl 也可直接测 ingest
+推荐：PicList 生命周期脚本目录
 
-详见 `scripts/piclist/README.md`。
+```
+~/Library/Application Support/piclist/scripts/onUploadSuccess/eva-media-ingest.js
+~/Library/Application Support/piclist/scripts/.env   # EVA_TOKEN / EVA_API_BASE
+```
+
+仓库模板：`scripts/piclist/eva-media-ingest.piclist.js`。在 PicList「脚本」页确认启用。  
+Obsidian → PicList HTTP（`127.0.0.1:36677`）上传成功后会触发 `onUploadSuccess`。
+
+备用 CLI：`scripts/piclist/on-upload-success.mjs`（stdin/argv JSON）。详见 `scripts/piclist/README.md`。
 
 ---
 
