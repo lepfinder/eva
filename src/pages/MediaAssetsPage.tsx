@@ -8,7 +8,9 @@ import {
   Music,
   File,
   Filter,
-  X,
+  Trash2,
+  Copy,
+  Check,
 } from 'lucide-react'
 import { invoke } from '@tauri-apps/api/core'
 import { Button } from '@/components/ui/button'
@@ -84,6 +86,8 @@ export function MediaAssetsPage() {
   const [favoriteOnly, setFavoriteOnly] = useState(false)
   const [selected, setSelected] = useState<MediaAsset | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [deleting, setDeleting] = useState(false)
+  const [copied, setCopied] = useState(false)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -123,6 +127,39 @@ export function MediaAssetsPage() {
       if (selected?.id === updated.id) setSelected(updated)
     } catch (e) {
       console.error('[MediaAssets] favorite failed', e)
+    }
+  }
+
+  const copyUrl = async (url: string) => {
+    try {
+      await navigator.clipboard.writeText(url)
+      setCopied(true)
+      window.setTimeout(() => setCopied(false), 1500)
+    } catch (e) {
+      console.error('[MediaAssets] copy failed', e)
+      setError('复制失败')
+    }
+  }
+
+  const deleteAsset = async (asset: MediaAsset) => {
+    const hasCloud = !!asset.cdnUrl?.trim()
+    const msg = hasCloud
+      ? `确定删除「${asset.filename}」？\n将同时删除云端对象与本地记录，此操作不可撤销。`
+      : `确定删除「${asset.filename}」？\n将删除本地记录，此操作不可撤销。`
+    if (!window.confirm(msg)) return
+
+    setDeleting(true)
+    setError(null)
+    try {
+      await invoke('media_assets_delete', { id: asset.id })
+      setItems((prev) => prev.filter((x) => x.id !== asset.id))
+      setTotal((t) => Math.max(0, t - 1))
+      setSelected(null)
+    } catch (e) {
+      console.error('[MediaAssets] delete failed', e)
+      setError(String(e))
+    } finally {
+      setDeleting(false)
     }
   }
 
@@ -264,18 +301,21 @@ export function MediaAssetsPage() {
         )}
       </div>
 
-      <Dialog open={!!selected} onOpenChange={(open) => !open && setSelected(null)}>
+      <Dialog
+        open={!!selected}
+        onOpenChange={(open) => {
+          if (!open) {
+            setSelected(null)
+            setCopied(false)
+          }
+        }}
+      >
         <DialogContent className="max-w-3xl max-h-[85vh] overflow-auto">
           {selected && (
-            <div className="space-y-4">
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <h2 className="text-lg font-semibold break-all">{selected.filename}</h2>
-                  <p className="text-xs text-muted-foreground mt-1 font-mono">{selected.id}</p>
-                </div>
-                <Button variant="ghost" size="icon" onClick={() => setSelected(null)}>
-                  <X className="h-4 w-4" />
-                </Button>
+            <div className="space-y-4 pr-6">
+              <div>
+                <h2 className="text-lg font-semibold break-all">{selected.filename}</h2>
+                <p className="text-xs text-muted-foreground mt-1 font-mono">{selected.id}</p>
               </div>
 
               <div className="rounded-lg border bg-muted/30 overflow-hidden flex items-center justify-center min-h-[200px]">
@@ -312,9 +352,30 @@ export function MediaAssetsPage() {
               </div>
 
               {selected.cdnUrl && (
-                <div className="text-sm">
-                  <span className="text-muted-foreground">CDN</span>
-                  <p className="font-mono text-xs break-all mt-0.5">{selected.cdnUrl}</p>
+                <div className="text-sm space-y-1.5">
+                  <span className="text-muted-foreground">图床 URL</span>
+                  <div className="flex items-start gap-2">
+                    <input
+                      readOnly
+                      value={selected.cdnUrl}
+                      onFocus={(e) => e.currentTarget.select()}
+                      onClick={(e) => e.currentTarget.select()}
+                      className="flex-1 min-w-0 rounded-md border bg-background px-2.5 py-1.5 font-mono text-xs outline-none focus:ring-2 focus:ring-ring"
+                    />
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      className="shrink-0"
+                      onClick={() => void copyUrl(selected.cdnUrl!)}
+                    >
+                      {copied ? (
+                        <Check className="h-4 w-4 mr-1.5 text-emerald-500" />
+                      ) : (
+                        <Copy className="h-4 w-4 mr-1.5" />
+                      )}
+                      {copied ? '已复制' : '复制'}
+                    </Button>
+                  </div>
                 </div>
               )}
 
@@ -338,20 +399,20 @@ export function MediaAssetsPage() {
                 </div>
               )}
 
-              <div className="flex gap-2">
+              <div className="flex flex-wrap gap-2">
                 <Button variant="outline" size="sm" onClick={() => void toggleFavorite(selected)}>
                   <Star className={clsx('h-4 w-4 mr-1.5', selected.favorite && 'fill-amber-400 text-amber-400')} />
                   {selected.favorite ? '取消收藏' : '收藏'}
                 </Button>
-                {selected.cdnUrl && (
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    onClick={() => void navigator.clipboard.writeText(selected.cdnUrl!)}
-                  >
-                    复制 URL
-                  </Button>
-                )}
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  disabled={deleting}
+                  onClick={() => void deleteAsset(selected)}
+                >
+                  <Trash2 className="h-4 w-4 mr-1.5" />
+                  {deleting ? '删除中…' : '删除'}
+                </Button>
               </div>
             </div>
           )}

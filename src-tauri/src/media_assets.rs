@@ -106,6 +106,16 @@ pub struct IngestResult {
     pub created: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeleteAssetResult {
+    pub id: String,
+    /// Whether a cloud DeleteObject was attempted and succeeded (or object already absent).
+    pub cloud_deleted: bool,
+    /// Whether a local_path file was removed from disk.
+    pub local_file_deleted: bool,
+}
+
 pub struct MediaAssetsState {
     pub db_path: PathBuf,
     pub user_data_dir: PathBuf,
@@ -751,6 +761,50 @@ pub fn update_asset(
     get_asset(user_data, id)?.ok_or_else(|| "asset missing after update".into())
 }
 
+/// Delete an asset: cloud object first (if cdn_url), then DB row (+ FTS / tags) and optional local file.
+/// If cloud delete fails, the local DB row is left untouched.
+pub fn delete_asset(user_data: &Path, id: &str) -> Result<DeleteAssetResult, String> {
+    let asset = get_asset(user_data, id)?.ok_or_else(|| format!("Asset not found: {}", id))?;
+
+    let mut cloud_deleted = false;
+    if let Some(ref url) = asset.cdn_url {
+        let url = url.trim();
+        if !url.is_empty() {
+            crate::cdn::delete_public_url(user_data, url).map_err(|e| {
+                format!("云端删除失败，本地记录未删除: {}", e)
+            })?;
+            cloud_deleted = true;
+        }
+    }
+
+    let mut local_file_deleted = false;
+    if let Some(ref p) = asset.local_path {
+        let path = Path::new(p);
+        if path.is_file() {
+            match fs::remove_file(path) {
+                Ok(()) => local_file_deleted = true,
+                Err(e) => log::warn!("[MediaAssets] remove local file {} failed: {}", p, e),
+            }
+        }
+    }
+
+    let conn = open_db(user_data)?;
+    let _ = conn.execute("DELETE FROM assets_fts WHERE id = ?1", params![id]);
+    // asset_tags cascade via FK when foreign_keys=ON
+    let n = conn
+        .execute("DELETE FROM assets WHERE id = ?1", params![id])
+        .map_err(|e| e.to_string())?;
+    if n == 0 {
+        return Err(format!("Asset not found: {}", id));
+    }
+
+    Ok(DeleteAssetResult {
+        id: id.to_string(),
+        cloud_deleted,
+        local_file_deleted,
+    })
+}
+
 pub fn list_all_tags(user_data: &Path) -> Result<Vec<MediaTag>, String> {
     let conn = open_db(user_data)?;
     init_schema(&conn)?;
@@ -846,6 +900,18 @@ pub fn media_assets_list_tags(
     list_all_tags(&user_data)
 }
 
+#[tauri::command]
+pub fn media_assets_delete(
+    state: State<SharedMediaAssetsState>,
+    id: String,
+) -> Result<DeleteAssetResult, String> {
+    let user_data = {
+        let g = state.lock().map_err(|e| e.to_string())?;
+        g.user_data_dir.clone()
+    };
+    delete_asset(&user_data, &id)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -917,6 +983,41 @@ mod tests {
         assert_eq!(listed.total, 1);
         assert_eq!(listed.items[0].tags.len(), 2);
 
+        let _ = fs::remove_dir_all(&ud);
+    }
+
+    #[test]
+    fn delete_local_only_asset_no_cdn() {
+        let ud = temp_user_data();
+        let r = ingest_asset(
+            &ud,
+            IngestRequest {
+                cdn_url: None,
+                local_path: None,
+                filename: Some("local-only.png".into()),
+                mime_type: Some("image/png".into()),
+                media_kind: Some("image".into()),
+                content_hash: Some("testdeletehash001".into()),
+                width: Some(1),
+                height: Some(1),
+                duration_ms: None,
+                file_size: Some(12),
+                prompt: None,
+                source: Some("test".into()),
+                favorite: None,
+                notes: None,
+                tags: vec![],
+                purpose_tags: vec![],
+                style_tags: vec![],
+            },
+        )
+        .unwrap();
+        assert!(r.created);
+        let id = r.asset.id.clone();
+        let del = delete_asset(&ud, &id).unwrap();
+        assert_eq!(del.id, id);
+        assert!(!del.cloud_deleted);
+        assert!(get_asset(&ud, &id).unwrap().is_none());
         let _ = fs::remove_dir_all(&ud);
     }
 }

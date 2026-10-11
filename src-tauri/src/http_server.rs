@@ -558,7 +558,7 @@ fn start_server_thread(
                 }
 
                 _ => {
-                    // Dynamic: GET/PATCH /api/assets/:id
+                    // Dynamic: GET/PATCH/DELETE /api/assets/:id
                     if path.starts_with("/api/assets/") {
                         let id = path.trim_start_matches("/api/assets/");
                         if !id.is_empty() && !id.contains('/') {
@@ -572,6 +572,24 @@ fn start_server_thread(
                                     }
                                     Err(e) => {
                                         let _ = request.respond(error_response(&e, 500));
+                                    }
+                                }
+                                continue;
+                            }
+                            if method == Method::Delete {
+                                match media_assets::delete_asset(&user_data_dir, id) {
+                                    Ok(result) => {
+                                        let _ = request.respond(json_response(&result, 200));
+                                    }
+                                    Err(e) => {
+                                        let code = if e.contains("not found") || e.contains("Not found") {
+                                            404
+                                        } else if e.contains("云端删除失败") {
+                                            502
+                                        } else {
+                                            400
+                                        };
+                                        let _ = request.respond(error_response(&e, code));
                                     }
                                 }
                                 continue;

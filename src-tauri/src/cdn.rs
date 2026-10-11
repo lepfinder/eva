@@ -591,6 +591,125 @@ pub fn upload_bytes_aliyun(
     Ok((oss_public_url(cfg, &key), key))
 }
 
+/// Parse OSS object key from a public CDN / custom-domain URL.
+pub fn object_key_from_url(cfg: &AliyunOssConfig, url: &str) -> Result<String, String> {
+    let url = url.trim();
+    if url.is_empty() {
+        return Err("空的 CDN URL".into());
+    }
+
+    if !cfg.custom_url.is_empty() {
+        let base = cfg.custom_url.trim_end_matches('/');
+        if let Some(rest) = url.strip_prefix(base) {
+            let key = rest.trim_start_matches('/');
+            if !key.is_empty() && !key.contains("..") {
+                return Ok(key.to_string());
+            }
+        }
+    }
+
+    for scheme in ["https", "http"] {
+        let prefix = format!(
+            "{}://{}.{}.aliyuncs.com/",
+            scheme,
+            cfg.bucket.trim(),
+            cfg.area.trim()
+        );
+        if let Some(key) = url.strip_prefix(&prefix) {
+            let key = key.split('?').next().unwrap_or(key);
+            if !key.is_empty() && !key.contains("..") {
+                return Ok(key.to_string());
+            }
+        }
+    }
+
+    // Fallback: path after host
+    if let Some(idx) = url.find("://") {
+        let after = &url[idx + 3..];
+        if let Some(slash) = after.find('/') {
+            let key = after[slash + 1..].split('?').next().unwrap_or("");
+            if !key.is_empty() && !key.contains("..") {
+                return Ok(key.to_string());
+            }
+        }
+    }
+    Err(format!("无法从 URL 解析对象键: {}", url))
+}
+
+/// Delete an object from Aliyun OSS (V1 signature). Treats 404/NoSuchKey as success.
+pub fn delete_object_aliyun(
+    cfg: &AliyunOssConfig,
+    secret: &str,
+    key: &str,
+) -> Result<(), String> {
+    if cfg.access_key_id.trim().is_empty() || secret.trim().is_empty() {
+        return Err("阿里云 OSS 凭证未配置".into());
+    }
+    if cfg.bucket.trim().is_empty() || cfg.area.trim().is_empty() {
+        return Err("请填写 bucket 与 region (area)".into());
+    }
+    let key = key.trim().trim_start_matches('/');
+    if key.is_empty() {
+        return Err("对象键为空".into());
+    }
+
+    let date = httpdate::fmt_http_date(SystemTime::now());
+    let canonical_resource = format!("/{}/{}", cfg.bucket, key);
+    let signature = oss_sign(secret, "DELETE", "", "", &date, &canonical_resource);
+    let auth = format!("OSS {}:{}", cfg.access_key_id.trim(), signature);
+    let url = format!("{}/{}", oss_endpoint(&cfg.bucket, &cfg.area), key);
+
+    let client = Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let resp = client
+        .delete(&url)
+        .header("Date", &date)
+        .header("Authorization", auth)
+        .send()
+        .map_err(|e| format!("OSS 删除请求失败: {}", e))?;
+
+    let status = resp.status();
+    if status.is_success() || status.as_u16() == 204 || status.as_u16() == 404 {
+        return Ok(());
+    }
+    let body = resp.text().unwrap_or_default();
+    // Idempotent: object already gone
+    if body.contains("NoSuchKey") {
+        return Ok(());
+    }
+    if body.contains("AccessDenied") || body.contains("oss:DeleteObject") {
+        return Err(format!(
+            "OSS 拒绝删除（当前 AccessKey 缺少 oss:DeleteObject 权限）。HTTP {}: {}",
+            status.as_u16(),
+            body.chars().take(280).collect::<String>()
+        ));
+    }
+    Err(format!(
+        "OSS 删除失败 HTTP {}: {}",
+        status.as_u16(),
+        body.chars().take(280).collect::<String>()
+    ))
+}
+
+/// Delete the OSS object referenced by a public CDN URL using current config.
+pub fn delete_public_url(user_data: &Path, cdn_url: &str) -> Result<(), String> {
+    let cfg = load_config(user_data);
+    if cfg.provider != "aliyun" {
+        return Err(format!(
+            "Provider '{}' 尚未实现云端删除（仅阿里云 OSS）",
+            cfg.provider
+        ));
+    }
+    let secret =
+        aliyun_secret(user_data).ok_or_else(|| "未找到 AccessKeySecret（请在设置中保存）".to_string())?;
+    let key = object_key_from_url(&cfg.aliyun, cdn_url)?;
+    log::info!("[CDN] DeleteObject key={}", key);
+    delete_object_aliyun(&cfg.aliyun, &secret, &key)
+}
+
 pub fn upload_path(user_data: &Path, local_path: &Path) -> Result<(String, String, String), String> {
     let cfg = load_config(user_data);
     if !cfg.enabled {
@@ -1009,6 +1128,40 @@ mod tests {
     use super::*;
 
     #[test]
+    fn object_key_from_default_oss_url() {
+        let cfg = AliyunOssConfig {
+            access_key_id: "x".into(),
+            access_key_secret: String::new(),
+            bucket: "my-bucket".into(),
+            area: "oss-cn-beijing".into(),
+            path_prefix: "img".into(),
+            custom_url: String::new(),
+        };
+        let url = "https://my-bucket.oss-cn-beijing.aliyuncs.com/img/202610/a_b.png";
+        assert_eq!(
+            object_key_from_url(&cfg, url).unwrap(),
+            "img/202610/a_b.png"
+        );
+    }
+
+    #[test]
+    fn object_key_from_custom_url() {
+        let cfg = AliyunOssConfig {
+            access_key_id: "x".into(),
+            access_key_secret: String::new(),
+            bucket: "my-bucket".into(),
+            area: "oss-cn-beijing".into(),
+            path_prefix: "img".into(),
+            custom_url: "https://cdn.example.com".into(),
+        };
+        let url = "https://cdn.example.com/img/202610/a_b.png";
+        assert_eq!(
+            object_key_from_url(&cfg, url).unwrap(),
+            "img/202610/a_b.png"
+        );
+    }
+
+    #[test]
     fn object_key_has_prefix_and_ext() {
         let key = build_object_key("img", "shot.PNG");
         assert!(key.starts_with("img/"));
@@ -1089,6 +1242,106 @@ JPEGDATA\r\n\
         eprintln!("uploaded key={} url_host_ok={}", key, url.starts_with("https://"));
         assert!(url.starts_with("https://"));
         assert!(key.contains("img/"));
+    }
+
+
+    /// Real OSS Put+Delete smoke. Run: cargo test --lib smoke_upload_then_delete -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn smoke_upload_then_delete() {
+        let ud = dirs_user_data();
+        if ud.is_none() {
+            eprintln!("skip: no userData");
+            return;
+        }
+        let ud = ud.unwrap();
+        let cfg = load_config(&ud);
+        if !cfg.enabled || cfg.provider != "aliyun" || aliyun_secret(&ud).is_none() {
+            eprintln!("skip: aliyun not configured");
+            return;
+        }
+        // 1x1 PNG
+        let png: &[u8] = &[
+            0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44,
+            0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00, 0x00, 0x90,
+            0x77, 0x53, 0xde, 0x00, 0x00, 0x00, 0x0c, 0x49, 0x44, 0x41, 0x54, 0x08, 0xd7, 0x63, 0xf8,
+            0xcf, 0xc0, 0x00, 0x00, 0x00, 0x03, 0x00, 0x01, 0x00, 0x05, 0xfe, 0xd4, 0xef, 0x00, 0x00,
+            0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+        ];
+        let filename = format!("eva-delete-smoke-{}.png", Uuid::new_v4());
+        let (url, key) = upload_bytes(&ud, png, &filename).expect("upload");
+        eprintln!("uploaded {} -> {}", key, url);
+        let ingest = crate::media_assets::ingest_asset(
+            &ud,
+            crate::media_assets::IngestRequest {
+                cdn_url: Some(url.clone()),
+                local_path: None,
+                filename: Some(filename),
+                mime_type: Some("image/png".into()),
+                media_kind: Some("image".into()),
+                content_hash: None,
+                width: Some(1),
+                height: Some(1),
+                duration_ms: None,
+                file_size: Some(png.len() as i64),
+                prompt: None,
+                source: Some("eva-delete-smoke".into()),
+                favorite: None,
+                notes: None,
+                tags: vec![],
+                purpose_tags: vec![],
+                style_tags: vec![],
+            },
+        )
+        .expect("ingest");
+        let id = ingest.asset.id.clone();
+        match crate::media_assets::delete_asset(&ud, &id) {
+            Ok(del) => {
+                assert!(del.cloud_deleted);
+                assert!(crate::media_assets::get_asset(&ud, &id)
+                    .unwrap()
+                    .is_none());
+                let client = Client::builder()
+                    .timeout(std::time::Duration::from_secs(15))
+                    .build()
+                    .unwrap();
+                let status = client.head(&url).send().map(|r| r.status().as_u16()).unwrap_or(0);
+                eprintln!("HEAD after delete: {}", status);
+                assert!(
+                    status == 404 || status == 403 || status == 0,
+                    "expected object gone, got {}",
+                    status
+                );
+            }
+            Err(e) => {
+                // Current PicList-imported AK may lack oss:DeleteObject — fail closed.
+                assert!(
+                    e.contains("云端删除失败") && e.contains("本地记录未删除"),
+                    "unexpected error: {}",
+                    e
+                );
+                assert!(
+                    crate::media_assets::get_asset(&ud, &id).unwrap().is_some(),
+                    "local row must remain when cloud delete fails"
+                );
+                eprintln!("cloud delete denied (expected if IAM lacks DeleteObject): {}", e);
+                // Best-effort local cleanup of smoke row only (no cloud)
+                let conn = crate::media_assets::open_db(&ud).unwrap();
+                let _ = conn.execute("DELETE FROM assets_fts WHERE id = ?1", [&id]);
+                let _ = conn.execute("DELETE FROM assets WHERE id = ?1", [&id]);
+            }
+        }
+    }
+
+    fn dirs_user_data() -> Option<PathBuf> {
+        let home = std::env::var_os("HOME")?;
+        let p = PathBuf::from(home)
+            .join("Library/Application Support/com.xiyangxie.eva/userData");
+        if p.is_dir() {
+            Some(p)
+        } else {
+            None
+        }
     }
 
 }
