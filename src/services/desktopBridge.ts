@@ -227,6 +227,15 @@ const activityApi: Record<string, AnyFn> = {
   rebuildDailyStats: () => invoke('activity_rebuild_daily_stats'),
 }
 
+// CDN / Image bed
+const cdnApi: Record<string, AnyFn> = {
+  getConfig: () => invoke('cdn_get_config'),
+  saveConfig: (config: any) => invoke('cdn_save_config', { config }),
+  testConnection: () => invoke('cdn_test_connection'),
+  importFromPiclist: () => invoke('cdn_import_from_piclist'),
+  uploadFile: (path: string) => invoke('cdn_upload_file', { path }),
+}
+
 // HTTP API Server
 const httpServerApi: Record<string, AnyFn> = {
   getConfig: () => invoke('http_server_get_config'),
@@ -282,6 +291,7 @@ export function initDesktopBridge(): void {
       if (key === 'onClipboardUrlDetected') return onClipboardUrlDetected
       if (key === 'activity') return activityApi
       if (key === 'httpServer') return httpServerApi
+      if (key === 'cdn') return cdnApi
       if (key === 'ai') return aiApi
       if (key === 'hotkeys') return hotkeysApi
       return stub[key]

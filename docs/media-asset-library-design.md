@@ -21,10 +21,18 @@
 - UI：侧栏 LIBRARY →「素材库」网格（筛选 / 收藏 / 详情）
 - PicList：`onUploadSuccess` 脚本 POST 入库
 
+### Phase B（已实现）
+
+- 极简阿里云 OSS 图床（密钥进钥匙串）+ 设置页「图床 CDN」
+- PicList 兼容 `POST/OPTIONS /upload`（JSON `list` + multipart `image`/`file`）
+- 额外监听 **36677**（可关）；亦挂在 **14220**
+- 上传成功自动 ingest（`source=eva-upload`）
+- 详见下文 §7
+
 ### 明确后置
 
 - EmbeddingGemma 2 画面语义检索
-- 新图切 Cloudflare R2（老 OSS 不动）
+- Cloudflare R2 实际上传（配置位已留）
 - 扫内容工坊 Markdown 反查「用在哪篇」
 
 ---
@@ -137,3 +145,51 @@ Obsidian → PicList HTTP（`127.0.0.1:36677`）上传成功后会触发 `onUplo
 | FTS | SQLite FTS5 足够 Phase A；语义检索后置 |
 | 密钥 | Token 只放 `scripts/.env`，不入库 |
 | 重启 | Rust 路由需重启 EVA 后生效 |
+
+---
+
+## 7. Phase B — 极简图床 + PicList 兼容上传（已实现）
+
+### 目标
+
+EVA 内置阿里云 OSS 直传，暴露与 PicList 兼容的本地上传口，上传成功自动写入素材库（`source=eva-upload`）。PicList GUI 可逐步卸掉，不必先删。
+
+### 配置
+
+- 非密钥：`userData/cdn_config.json`（provider / bucket / area / pathPrefix / customUrl / piclistCompat*）
+- 密钥：macOS Keychain `com.xiyangxie.eva.cdn` / `aliyun-access-key-secret`（失败时回落 `userData/.cdn_aliyun_secret`，权限 600，已 gitignore）
+- UI：设置 → **图床 CDN**（掩码展示、测试连接、从 PicList `data.json` 导入）
+
+### HTTP
+
+| 方法 | 路径 | 鉴权 | 说明 |
+|---|---|---|---|
+| `OPTIONS` | `/upload` | 无 | CORS / 探测 |
+| `POST` | `/upload` | **无**（仅绑 127.0.0.1） | PicList 兼容主入口 |
+| 同上 | 端口 **14220** 与可选 **36677** | | 36677 由 `piclistCompatEnabled` 控制 |
+
+**JSON**
+
+```json
+{"list":["/abs/path.png"]}
+→ {"success":true,"result":["https://..."],"message":"success"}
+```
+
+**multipart**：字段名 `image` 或 `file`。
+
+对象键：`{pathPrefix}/YYYYMM/{timestamp}_{rand4}.{ext}`，默认 prefix=`img`。
+
+无自定义域名时 URL：`https://{bucket}.{area}.aliyuncs.com/{key}`。
+
+### Obsidian 迁移
+
+1. 退出 PicList（释放 36677）或改插件到 `http://127.0.0.1:14220/upload`
+2. EVA 开启图床 +（可选）兼容端口
+3. 设置页「从 PicList 导入」或手填 OSS
+4. 粘贴一张图验收：CDN 链接 + 素材库出现 `eva-upload` 条目
+
+### 明确不做（Phase B）
+
+- R2 实际上传（配置位已留）
+- Embedding / 全量相册同步
+- 复刻 PicList 相册 GUI / 多图床插件市场

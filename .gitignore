@@ -25,3 +25,6 @@ dist-ssr
 scripts/.env
 scripts/.env.*
 !.env.example
+.cdn_aliyun_secret
+**/.cdn_aliyun_secret
+userData/.cdn_aliyun_secret

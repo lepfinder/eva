@@ -2,6 +2,7 @@ use crate::activity_tracker;
 use crate::clipboard;
 use crate::env_detector;
 use crate::local_ports;
+use crate::cdn;
 use crate::media_assets;
 use crate::memory_analyzer;
 use crate::visual_recall;
@@ -55,6 +56,7 @@ pub struct HttpServerState {
     user_data_dir: PathBuf,
     config: Arc<Mutex<HttpServerConfig>>,
     shutdown_signal: Arc<AtomicBool>,
+    piclist_shutdown: Arc<AtomicBool>,
 }
 
 pub type SharedHttpServerState = Arc<Mutex<HttpServerState>>;
@@ -205,6 +207,13 @@ fn start_server_thread(
                     service: &'static str,
                 }
                 let _ = request.respond(json_response(&Health { status: "ok", version: "0.1.2", service: "EVA Local Intelligence API" }, 200));
+                continue;
+            }
+
+            // PicList-compatible upload (no Bearer auth — localhost only bind)
+            if path == "/upload" || path == "/upload/" {
+                let resp = handle_piclist_upload(&mut request, &user_data_dir, &method);
+                let _ = request.respond(resp);
                 continue;
             }
 
@@ -600,6 +609,126 @@ fn start_server_thread(
     });
 }
 
+
+// ──────────────────────────────────────────────────
+// PicList-compatible /upload
+// ──────────────────────────────────────────────────
+
+fn header_value(request: &tiny_http::Request, name: &str) -> Option<String> {
+    request
+        .headers()
+        .iter()
+        .find(|h| h.field.as_str().to_string().eq_ignore_ascii_case(name))
+        .map(|h| h.value.as_str().to_string())
+}
+
+fn handle_piclist_upload(
+    request: &mut tiny_http::Request,
+    user_data_dir: &Path,
+    method: &Method,
+) -> Response<std::io::Cursor<Vec<u8>>> {
+    if *method != Method::Post {
+        return error_response("Only POST is supported on /upload", 405);
+    }
+
+    let content_type = header_value(request, "Content-Type").unwrap_or_default();
+    let mut body = Vec::new();
+    if let Err(e) = request.as_reader().read_to_end(&mut body) {
+        return error_response(&format!("Failed to read body: {}", e), 400);
+    }
+
+    let mut urls: Vec<String> = Vec::new();
+
+    if content_type.to_ascii_lowercase().starts_with("multipart/form-data") {
+        match cdn::parse_multipart(&body, &content_type) {
+            Ok(file) => {
+                match cdn::upload_bytes(user_data_dir, &file.data, &file.filename) {
+                    Ok((url, _key)) => {
+                        cdn::ingest_after_upload(
+                            user_data_dir,
+                            &url,
+                            None,
+                            &file.filename,
+                            Some(file.data.len() as i64),
+                        );
+                        urls.push(url);
+                    }
+                    Err(e) => {
+                        return json_response(
+                            &serde_json::json!({
+                                "success": false,
+                                "result": [],
+                                "message": e,
+                            }),
+                            500,
+                        );
+                    }
+                }
+            }
+            Err(e) => {
+                return json_response(
+                    &serde_json::json!({
+                        "success": false,
+                        "result": [],
+                        "message": e,
+                    }),
+                    400,
+                );
+            }
+        }
+    } else {
+        // JSON: {"list":["/abs/path.png"]}  (also accept raw array)
+        let body_str = String::from_utf8_lossy(&body);
+        #[derive(Deserialize)]
+        struct UploadList {
+            list: Vec<String>,
+        }
+        let paths: Vec<String> = if let Ok(parsed) = serde_json::from_str::<UploadList>(&body_str) {
+            parsed.list
+        } else if let Ok(arr) = serde_json::from_str::<Vec<String>>(&body_str) {
+            arr
+        } else {
+            return json_response(
+                &serde_json::json!({
+                    "success": false,
+                    "result": [],
+                    "message": "Expected JSON {\"list\":[\"/path\"]} or multipart image/file",
+                }),
+                400,
+            );
+        };
+
+        for p in paths {
+            match cdn::upload_path(user_data_dir, Path::new(&p)) {
+                Ok((url, _key, filename)) => {
+                    let size = std::fs::metadata(&p).ok().map(|m| m.len() as i64);
+                    cdn::ingest_after_upload(user_data_dir, &url, Some(&p), &filename, size);
+                    urls.push(url);
+                }
+                Err(e) => {
+                    return json_response(
+                        &serde_json::json!({
+                            "success": false,
+                            "result": urls,
+                            "message": format!("{}: {}", p, e),
+                        }),
+                        500,
+                    );
+                }
+            }
+        }
+    }
+
+    json_response(
+        &serde_json::json!({
+            "success": true,
+            "result": urls,
+            "message": "success",
+        }),
+        200,
+    )
+}
+
 // ──────────────────────────────────────────────────
 // Lifecycle & Management
 // ──────────────────────────────────────────────────
@@ -619,6 +748,8 @@ pub fn init(app: &AppHandle) -> SharedHttpServerState {
     let token_arc = Arc::new(Mutex::new(config.token.clone()));
     let require_auth_arc = Arc::new(AtomicBool::new(config.require_auth));
 
+    let piclist_shutdown = Arc::new(AtomicBool::new(false));
+
     if config.enabled {
         config.running = true;
         start_server_thread(
@@ -630,11 +761,33 @@ pub fn init(app: &AppHandle) -> SharedHttpServerState {
         );
     }
 
+    // PicList-compatible companion port (default 36677) for Obsidian zero-config
+    {
+        let cdn_cfg = cdn::load_config(&user_data);
+        if cdn_cfg.piclist_compat_enabled {
+            let pport = cdn_cfg.piclist_compat_port;
+            if pport != 0 && pport != config.port {
+                log::info!(
+                    "[HttpServer] Starting PicList-compat listener on 127.0.0.1:{}",
+                    pport
+                );
+                start_server_thread(
+                    pport,
+                    Arc::clone(&token_arc),
+                    Arc::clone(&require_auth_arc),
+                    user_data.clone(),
+                    Arc::clone(&piclist_shutdown),
+                );
+            }
+        }
+    }
+
     Arc::new(Mutex::new(HttpServerState {
         config_path,
         user_data_dir: user_data,
         config: Arc::new(Mutex::new(config)),
         shutdown_signal,
+        piclist_shutdown,
     }))
 }
 
@@ -671,20 +824,37 @@ pub fn http_server_save_config(
     let mut cfg_guard = guard.config.lock().map_err(|e| e.to_string())?;
     *cfg_guard = config.clone();
 
-    // Signal old thread to stop and restart if enabled
+    // Stop existing listeners, then restart
     guard.shutdown_signal.store(true, Ordering::Relaxed);
+    guard.piclist_shutdown.store(true, Ordering::Relaxed);
+    std::thread::sleep(std::time::Duration::from_millis(700));
+    guard.shutdown_signal.store(false, Ordering::Relaxed);
+    guard.piclist_shutdown.store(false, Ordering::Relaxed);
 
-    let new_shutdown = Arc::new(AtomicBool::new(false));
     if config.enabled {
         let token_arc = Arc::new(Mutex::new(config.token.clone()));
         let require_auth_arc = Arc::new(AtomicBool::new(config.require_auth));
         start_server_thread(
             config.port,
-            token_arc,
-            require_auth_arc,
+            Arc::clone(&token_arc),
+            Arc::clone(&require_auth_arc),
             guard.user_data_dir.clone(),
-            Arc::clone(&new_shutdown),
+            Arc::clone(&guard.shutdown_signal),
         );
+
+        let cdn_cfg = cdn::load_config(&guard.user_data_dir);
+        if cdn_cfg.piclist_compat_enabled {
+            let pport = cdn_cfg.piclist_compat_port;
+            if pport != 0 && pport != config.port {
+                start_server_thread(
+                    pport,
+                    token_arc,
+                    require_auth_arc,
+                    guard.user_data_dir.clone(),
+                    Arc::clone(&guard.piclist_shutdown),
+                );
+            }
+        }
     }
 
     let mut result = config;

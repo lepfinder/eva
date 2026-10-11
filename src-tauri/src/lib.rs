@@ -1,5 +1,6 @@
 pub mod activity_tracker;
 pub mod ai;
+pub mod cdn;
 pub mod clipboard;
 pub mod env_detector;
 pub mod hotkeys;
@@ -143,6 +144,10 @@ pub fn run() {
             // Initialise media assets library
             let media_assets_state = media_assets::init(app.handle());
             app.manage(media_assets_state);
+
+            // Initialise CDN / image bed
+            let cdn_state = cdn::init(app.handle());
+            app.manage(cdn_state);
 
             // Initialise local HTTP API server
             let http_state = http_server::init(app.handle());
@@ -364,6 +369,12 @@ pub fn run() {
             media_assets::media_assets_ingest,
             media_assets::media_assets_update,
             media_assets::media_assets_list_tags,
+            // CDN / Image bed
+            cdn::cdn_get_config,
+            cdn::cdn_save_config,
+            cdn::cdn_test_connection,
+            cdn::cdn_import_from_piclist,
+            cdn::cdn_upload_file,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
