@@ -902,8 +902,12 @@ pub fn ingest_after_upload(
     local_path: Option<&str>,
     filename: &str,
     file_size: Option<i64>,
+    width: Option<i64>,
+    height: Option<i64>,
 ) {
-    let (width, height) = if let Some(p) = local_path {
+    let (width, height) = if width.is_some() || height.is_some() {
+        (width, height)
+    } else if let Some(p) = local_path {
         read_image_size(Path::new(p))
     } else {
         (None, None)
@@ -1126,7 +1130,74 @@ pub fn cdn_upload_file(
     match upload_path(&ud, Path::new(&path)) {
         Ok((url, key, filename)) => {
             let size = fs::metadata(&path).ok().map(|m| m.len() as i64);
-            ingest_after_upload(&ud, &url, Some(&path), &filename, size);
+            ingest_after_upload(&ud, &url, Some(&path), &filename, size, None, None);
+            Ok(UploadResult {
+                success: true,
+                url: Some(url),
+                key: Some(key),
+                message: "success".into(),
+            })
+        }
+        Err(e) => Ok(UploadResult {
+            success: false,
+            url: None,
+            key: None,
+            message: e,
+        }),
+    }
+}
+
+/// Upload raw bytes (base64, optionally as a data URL) and ingest as `eva-upload`.
+#[tauri::command]
+pub fn cdn_upload_bytes(
+    state: State<SharedCdnState>,
+    data_base64: String,
+    filename: String,
+) -> Result<UploadResult, String> {
+    let ud = state_user_data(&state)?;
+    let clean = if let Some(idx) = data_base64.find(',') {
+        &data_base64[idx + 1..]
+    } else {
+        &data_base64
+    };
+    let data = B64
+        .decode(clean.trim())
+        .map_err(|e| format!("base64 解码失败: {}", e))?;
+    if data.is_empty() {
+        return Ok(UploadResult {
+            success: false,
+            url: None,
+            key: None,
+            message: "空文件".into(),
+        });
+    }
+    let safe_name = {
+        let n = filename.trim();
+        if n.is_empty() {
+            "upload.bin".to_string()
+        } else {
+            Path::new(n)
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or("upload.bin")
+                .to_string()
+        }
+    };
+    match upload_bytes(&ud, &data, &safe_name) {
+        Ok((url, key)) => {
+            let (width, height) = match image::load_from_memory(&data) {
+                Ok(img) => (Some(img.width() as i64), Some(img.height() as i64)),
+                Err(_) => (None, None),
+            };
+            ingest_after_upload(
+                &ud,
+                &url,
+                None,
+                &safe_name,
+                Some(data.len() as i64),
+                width,
+                height,
+            );
             Ok(UploadResult {
                 success: true,
                 url: Some(url),

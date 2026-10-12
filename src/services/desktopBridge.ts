@@ -234,6 +234,8 @@ const cdnApi: Record<string, AnyFn> = {
   testConnection: () => invoke('cdn_test_connection'),
   importFromPiclist: () => invoke('cdn_import_from_piclist'),
   uploadFile: (path: string) => invoke('cdn_upload_file', { path }),
+  uploadBytes: (dataBase64: string, filename: string) =>
+    invoke('cdn_upload_bytes', { dataBase64, filename }),
 }
 
 // HTTP API Server

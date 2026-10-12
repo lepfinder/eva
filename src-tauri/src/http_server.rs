@@ -717,6 +717,8 @@ fn upload_one_bytes(
         None,
         filename,
         Some(data.len() as i64),
+        width,
+        height,
     );
     Ok((url, filename.to_string(), width, height))
 }
@@ -802,7 +804,7 @@ fn handle_piclist_upload(
         match cdn::upload_path(user_data_dir, Path::new(&p)) {
             Ok((url, _key, filename)) => {
                 let size = std::fs::metadata(&p).ok().map(|m| m.len() as i64);
-                cdn::ingest_after_upload(user_data_dir, &url, Some(&p), &filename, size);
+                cdn::ingest_after_upload(user_data_dir, &url, Some(&p), &filename, size, None, None);
                 let (w, h) = match image::image_dimensions(Path::new(&p)) {
                     Ok((ww, hh)) => (Some(ww as i64), Some(hh as i64)),
                     Err(_) => (None, None),

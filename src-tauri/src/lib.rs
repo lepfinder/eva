@@ -378,6 +378,7 @@ pub fn run() {
             cdn::cdn_test_connection,
             cdn::cdn_import_from_piclist,
             cdn::cdn_upload_file,
+            cdn::cdn_upload_bytes,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

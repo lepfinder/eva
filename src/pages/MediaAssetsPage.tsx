@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   Image as ImageIcon,
   Search,
@@ -6,15 +6,18 @@ import {
   RefreshCw,
   Film,
   Music,
-  File,
+  File as FileIcon,
   Filter,
   Trash2,
   Copy,
   Check,
   CloudUpload,
+  Upload,
+  Loader2,
 } from 'lucide-react'
 import { invoke } from '@tauri-apps/api/core'
 import { Button, buttonVariants } from '@/components/ui/button'
+import { Progress } from '@/components/ui/progress'
 import { Badge } from '@/components/ui/badge'
 import { Dialog, DialogContent } from '@/components/ui/dialog'
 import {
@@ -72,7 +75,7 @@ function KindIcon({ kind }: { kind: string }) {
   if (kind === 'video') return <Film className="h-8 w-8 opacity-40" />
   if (kind === 'audio') return <Music className="h-8 w-8 opacity-40" />
   if (kind === 'image') return <ImageIcon className="h-8 w-8 opacity-40" />
-  return <File className="h-8 w-8 opacity-40" />
+  return <FileIcon className="h-8 w-8 opacity-40" />
 }
 
 function previewUrl(asset: MediaAsset): string | null {
@@ -95,6 +98,67 @@ function formatTime(ms: number): string {
   }
 }
 
+const IMAGE_EXT = new Set([
+  'png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'heic', 'heif', 'avif',
+])
+const MEDIA_EXT = new Set([
+  ...IMAGE_EXT,
+  'mp4', 'mov', 'webm', 'mkv', 'mp3', 'wav', 'aac', 'm4a', 'flac',
+])
+
+function extOf(name: string): string {
+  const i = name.lastIndexOf('.')
+  return i >= 0 ? name.slice(i + 1).toLowerCase() : ''
+}
+
+function isUploadableFile(file: File): boolean {
+  if (file.type.startsWith('image/') || file.type.startsWith('video/') || file.type.startsWith('audio/')) {
+    return true
+  }
+  return MEDIA_EXT.has(extOf(file.name))
+}
+
+function isImageFile(file: File): boolean {
+  if (file.type.startsWith('image/')) return true
+  return IMAGE_EXT.has(extOf(file.name))
+}
+
+function fileToDataUrl(file: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(String(reader.result || ''))
+    reader.onerror = () => reject(reader.error || new Error('读取文件失败'))
+    reader.readAsDataURL(file)
+  })
+}
+
+function pasteFilename(mime: string): string {
+  const ext =
+    mime === 'image/jpeg' ? 'jpg'
+    : mime === 'image/gif' ? 'gif'
+    : mime === 'image/webp' ? 'webp'
+    : 'png'
+  const stamp = new Date()
+  const pad = (n: number) => String(n).padStart(2, '0')
+  const name = [
+    stamp.getFullYear(),
+    pad(stamp.getMonth() + 1),
+    pad(stamp.getDate()),
+    '_',
+    pad(stamp.getHours()),
+    pad(stamp.getMinutes()),
+    pad(stamp.getSeconds()),
+  ].join('')
+  return `paste_${name}.${ext}`
+}
+
+interface UploadResult {
+  success: boolean
+  url?: string | null
+  key?: string | null
+  message: string
+}
+
 export function MediaAssetsPage() {
   const [items, setItems] = useState<MediaAsset[]>([])
   const [total, setTotal] = useState(0)
@@ -109,6 +173,18 @@ export function MediaAssetsPage() {
   const [copied, setCopied] = useState(false)
   const [copiedCardId, setCopiedCardId] = useState<string | null>(null)
   const [toastMsg, setToastMsg] = useState<string | null>(null)
+  const [uploading, setUploading] = useState(false)
+  const [uploadProgress, setUploadProgress] = useState(0)
+  const [uploadLabel, setUploadLabel] = useState('')
+  const [dragOver, setDragOver] = useState(false)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  const dragDepthRef = useRef(0)
+  const pageRef = useRef<HTMLDivElement>(null)
+
+  const showToast = useCallback((msg: string) => {
+    setToastMsg(msg)
+    window.setTimeout(() => setToastMsg(null), 4000)
+  }, [])
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -232,22 +308,178 @@ export function MediaAssetsPage() {
     }
   }
 
+  const uploadFiles = useCallback(
+    async (files: File[]) => {
+      const list = files.filter(isUploadableFile)
+      if (list.length === 0) {
+        setError('没有可上传的文件（支持图片 / 视频 / 音频）')
+        return
+      }
+      // Prefer images first when mixed
+      list.sort((a, b) => Number(isImageFile(b)) - Number(isImageFile(a)))
+
+      setUploading(true)
+      setError(null)
+      setToastMsg(null)
+      setUploadProgress(0)
+      let ok = 0
+      let fail = 0
+      const errors: string[] = []
+
+      for (let i = 0; i < list.length; i++) {
+        const file = list[i]
+        setUploadLabel(`上传中 ${i + 1}/${list.length} · ${file.name}`)
+        setUploadProgress(Math.round((i / list.length) * 100))
+        try {
+          const dataUrl = await fileToDataUrl(file)
+          const res = await invoke<UploadResult>('cdn_upload_bytes', {
+            dataBase64: dataUrl,
+            filename: file.name || `upload_${i + 1}.bin`,
+          })
+          if (res.success) {
+            ok += 1
+          } else {
+            fail += 1
+            errors.push(`${file.name}: ${res.message}`)
+          }
+        } catch (e) {
+          fail += 1
+          errors.push(`${file.name}: ${String(e)}`)
+        }
+        setUploadProgress(Math.round(((i + 1) / list.length) * 100))
+      }
+
+      setUploading(false)
+      setUploadLabel('')
+      setUploadProgress(0)
+
+      if (ok > 0) {
+        await load()
+        showToast(fail > 0 ? `已上传 ${ok} 个，失败 ${fail} 个` : `已上传 ${ok} 个素材`)
+      }
+      if (fail > 0 && ok === 0) {
+        setError(errors.slice(0, 3).join('\n'))
+      } else if (fail > 0) {
+        setError(errors.slice(0, 3).join('\n'))
+      }
+    },
+    [load, showToast],
+  )
+
+  const openFilePicker = () => {
+    if (uploading) return
+    fileInputRef.current?.click()
+  }
+
+  const onFileInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files ? Array.from(e.target.files) : []
+    e.target.value = ''
+    if (files.length) void uploadFiles(files)
+  }
+
+  const onDragEnter = (e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    dragDepthRef.current += 1
+    if (e.dataTransfer.types.includes('Files')) setDragOver(true)
+  }
+
+  const onDragLeave = (e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    dragDepthRef.current = Math.max(0, dragDepthRef.current - 1)
+    if (dragDepthRef.current === 0) setDragOver(false)
+  }
+
+  const onDragOver = (e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    if (e.dataTransfer.types.includes('Files')) {
+      e.dataTransfer.dropEffect = 'copy'
+    }
+  }
+
+  const onDrop = (e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    dragDepthRef.current = 0
+    setDragOver(false)
+    if (uploading) return
+    const files = Array.from(e.dataTransfer.files || [])
+    if (files.length) void uploadFiles(files)
+  }
+
+  useEffect(() => {
+    const onPaste = (e: ClipboardEvent) => {
+      if (uploading) return
+      const target = e.target as HTMLElement | null
+      if (target) {
+        const tag = target.tagName
+        if (tag === 'INPUT' || tag === 'TEXTAREA' || target.isContentEditable) return
+      }
+
+      const items = e.clipboardData?.items
+      if (!items?.length) return
+      const imageFiles: File[] = []
+      for (const item of Array.from(items)) {
+        if (item.kind === 'file' && item.type.startsWith('image/')) {
+          const blob = item.getAsFile()
+          if (!blob) continue
+          const name =
+            blob.name && blob.name !== 'image.png'
+              ? blob.name
+              : pasteFilename(item.type || blob.type || 'image/png')
+          imageFiles.push(new File([blob], name, { type: blob.type || item.type || 'image/png' }))
+        }
+      }
+      if (imageFiles.length === 0) return
+      e.preventDefault()
+      void uploadFiles(imageFiles)
+    }
+    window.addEventListener('paste', onPaste)
+    return () => window.removeEventListener('paste', onPaste)
+  }, [uploadFiles, uploading])
+
   const pendingHasCloud = Boolean(pendingDelete?.cdnUrl?.trim())
 
   return (
     <TooltipProvider delayDuration={300}>
-      <div className="flex h-full flex-col gap-4">
+      <div
+        ref={pageRef}
+        tabIndex={-1}
+        className="relative flex h-full flex-col gap-4 outline-none"
+        onDragEnter={onDragEnter}
+        onDragLeave={onDragLeave}
+        onDragOver={onDragOver}
+        onDrop={onDrop}
+      >
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/*,video/*,audio/*"
+          multiple
+          className="hidden"
+          onChange={onFileInputChange}
+        />
         <div className="flex items-start justify-between gap-4">
           <div>
             <h1 className="text-xl font-semibold tracking-tight">素材库</h1>
             <p className="text-sm text-muted-foreground mt-1">
-              自用图/音/视频资产 · 手动入库 · 与视觉回溯分离
+              拖拽 / ⌘V 粘贴 / 上传 · 与视觉回溯分离
             </p>
           </div>
           <div className="flex items-center gap-2">
             <Badge variant="secondary" className="font-mono text-[11px]">
               {total} 项
             </Badge>
+            <Button size="sm" onClick={openFilePicker} disabled={uploading}>
+              {uploading ? (
+                <Loader2 className="h-4 w-4 mr-1.5 animate-spin" />
+              ) : (
+                <Upload className="h-4 w-4 mr-1.5" />
+              )}
+              上传
+            </Button>
             <Button
               variant="outline"
               size="sm"
@@ -262,7 +494,7 @@ export function MediaAssetsPage() {
               <CloudUpload className="h-4 w-4 mr-1.5" />
               图床配置
             </Button>
-            <Button variant="outline" size="sm" onClick={() => void load()} disabled={loading}>
+            <Button variant="outline" size="sm" onClick={() => void load()} disabled={loading || uploading}>
               <RefreshCw className={clsx('h-4 w-4 mr-1.5', loading && 'animate-spin')} />
               刷新
             </Button>
@@ -320,15 +552,35 @@ export function MediaAssetsPage() {
             {toastMsg}
           </div>
         )}
+        {uploading && (
+          <div className="rounded-md border bg-muted/40 px-3 py-2 space-y-1.5">
+            <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+              <span className="truncate">{uploadLabel || '上传中…'}</span>
+              <span className="font-mono shrink-0">{uploadProgress}%</span>
+            </div>
+            <Progress value={uploadProgress} className="h-1.5" />
+          </div>
+        )}
 
-        <div className="flex-1 overflow-auto rounded-lg border bg-card/30 p-3">
+        <div className="relative flex-1 overflow-auto rounded-lg border bg-card/30 p-3">
+          {dragOver && (
+            <div className="pointer-events-none absolute inset-2 z-20 flex flex-col items-center justify-center rounded-lg border-2 border-dashed border-primary/60 bg-background/80 backdrop-blur-sm">
+              <Upload className="h-8 w-8 text-primary mb-2" />
+              <p className="text-sm font-medium">松开以上传素材</p>
+              <p className="text-xs text-muted-foreground mt-1">支持图片 / 视频 / 音频</p>
+            </div>
+          )}
           {items.length === 0 && !loading ? (
             <div className="flex h-full min-h-[240px] flex-col items-center justify-center text-muted-foreground gap-2">
               <ImageIcon className="h-10 w-10 opacity-30" />
               <p className="text-sm">还没有素材</p>
-              <p className="text-xs opacity-70">
-                可在「图床配置」中从 PicList 导入相册，或粘贴上传 / <code className="font-mono">POST /api/assets/ingest</code>
+              <p className="text-xs opacity-70 text-center max-w-sm">
+                拖拽文件到此处，或 ⌘V 粘贴剪贴板图片，或点右上角「上传」
               </p>
+              <Button size="sm" variant="secondary" className="mt-2" onClick={openFilePicker} disabled={uploading}>
+                <Upload className="h-4 w-4 mr-1.5" />
+                选择文件
+              </Button>
             </div>
           ) : (
             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5 gap-3">
