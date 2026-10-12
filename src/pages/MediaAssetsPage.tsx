@@ -7,7 +7,6 @@ import {
   Film,
   Music,
   File as FileIcon,
-  Filter,
   Trash2,
   Copy,
   Check,
@@ -26,12 +25,8 @@ import { Badge } from '@/components/ui/badge'
 import { Dialog, DialogContent } from '@/components/ui/dialog'
 import {
   DropdownMenu,
-  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
@@ -801,44 +796,28 @@ export function MediaAssetsPage() {
             <Sparkles className={clsx('h-4 w-4 mr-1.5', semanticMode && 'text-violet-500')} />
             语义
           </Button>
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
+          <div className="flex items-center gap-1 rounded-md border p-0.5">
+            {(['all', 'image', 'video', 'audio', 'other'] as const).map((k) => (
               <Button
+                key={k}
                 size="sm"
-                variant={filtersActive ? 'secondary' : 'outline'}
-                className="h-9"
+                variant={kind === k ? 'secondary' : 'ghost'}
+                className="h-8 px-2.5 text-xs"
+                onClick={() => setKind(k)}
               >
-                <Filter className="h-4 w-4 mr-1.5" />
-                筛选
-                {filtersActive ? (
-                  <span className="ml-1.5 rounded-full bg-primary/15 px-1.5 text-[10px] font-mono">
-                    {(kind !== 'all' ? 1 : 0) + (favoriteOnly ? 1 : 0)}
-                  </span>
-                ) : null}
+                {k === 'all' ? '全部' : k === 'image' ? '图片' : k === 'video' ? '视频' : k === 'audio' ? '音频' : '其他'}
               </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="start" className="w-52">
-              <DropdownMenuLabel>类型</DropdownMenuLabel>
-              <DropdownMenuRadioGroup
-                value={kind}
-                onValueChange={(v) => setKind(v as typeof kind)}
-              >
-                <DropdownMenuRadioItem value="all">全部</DropdownMenuRadioItem>
-                <DropdownMenuRadioItem value="image">图片</DropdownMenuRadioItem>
-                <DropdownMenuRadioItem value="video">视频</DropdownMenuRadioItem>
-                <DropdownMenuRadioItem value="audio">音频</DropdownMenuRadioItem>
-                <DropdownMenuRadioItem value="other">其他</DropdownMenuRadioItem>
-              </DropdownMenuRadioGroup>
-              <DropdownMenuSeparator />
-              <DropdownMenuCheckboxItem
-                checked={favoriteOnly}
-                onCheckedChange={(v) => setFavoriteOnly(Boolean(v))}
-              >
-                <Star className={clsx('h-3.5 w-3.5 mr-1.5', favoriteOnly && 'fill-amber-400 text-amber-400')} />
-                仅收藏
-              </DropdownMenuCheckboxItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
+            ))}
+          </div>
+          <Button
+            size="sm"
+            variant={favoriteOnly ? 'secondary' : 'outline'}
+            className="h-9"
+            onClick={() => setFavoriteOnly((v) => !v)}
+            title="仅看收藏"
+          >
+            <Star className={clsx('h-4 w-4', favoriteOnly && 'fill-amber-400 text-amber-400')} />
+          </Button>
           {filtersActive && (
             <Button
               size="sm"
