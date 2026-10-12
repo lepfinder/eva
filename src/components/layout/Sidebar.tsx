@@ -60,18 +60,18 @@ const navGroups = [
     ]
   },
   {
+    title: 'LIBRARY',
+    items: [
+      { id: 'mediaassets', labelKey: 'nav.mediaassets', icon: <Images className="h-5 w-5" /> }
+    ]
+  },
+  {
     title: 'MEMORY',
     items: [
       { id: 'clipboard', labelKey: 'nav.clipboard', icon: <Clipboard className="h-5 w-5" /> },
       { id: 'timeauditor', labelKey: 'nav.timeauditor', icon: <Timer className="h-5 w-5" /> },
       { id: 'visualrecall', labelKey: 'nav.visualrecall', icon: <MonitorPlay className="h-5 w-5" /> },
       { id: 'vault', labelKey: 'nav.vault', icon: <Lock className="h-5 w-5" /> }
-    ]
-  },
-  {
-    title: 'LIBRARY',
-    items: [
-      { id: 'mediaassets', labelKey: 'nav.mediaassets', icon: <Images className="h-5 w-5" /> }
     ]
   }
 ]
