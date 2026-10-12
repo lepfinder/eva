@@ -3,9 +3,12 @@
 //! 路径：userData/media-assets.db
 //! 入库来源：PicList 钩子 / 手动 / Grok 等；Phase A 不做向量检索与稿件反查。
 
+use flate2::read::GzDecoder;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -34,6 +37,8 @@ pub struct MediaAsset {
     pub file_size: Option<i64>,
     pub prompt: Option<String>,
     pub source: String,
+    pub source_ref: Option<String>,
+    pub cdn_provider: Option<String>,
     pub favorite: bool,
     pub notes: Option<String>,
     pub created_at: i64,
@@ -65,8 +70,14 @@ pub struct IngestRequest {
     pub file_size: Option<i64>,
     pub prompt: Option<String>,
     pub source: Option<String>,
+    /// External source id (e.g. PicList gallery item id). Never store secrets here.
+    pub source_ref: Option<String>,
+    /// Image-bed provider id (e.g. aliyun_oss). Not credentials.
+    pub cdn_provider: Option<String>,
     pub favorite: Option<bool>,
     pub notes: Option<String>,
+    /// Preserve original upload time (ms since epoch) when importing.
+    pub created_at: Option<i64>,
     /// 通用标签名
     #[serde(default)]
     pub tags: Vec<String>,
@@ -114,6 +125,40 @@ pub struct DeleteAssetResult {
     pub cloud_deleted: bool,
     /// Whether a local_path file was removed from disk.
     pub local_file_deleted: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportPiclistFailure {
+    pub id: Option<String>,
+    pub img_url: Option<String>,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportPiclistResult {
+    pub total: i64,
+    pub inserted: i64,
+    pub updated: i64,
+    pub skipped: i64,
+    pub failed: i64,
+    pub failures: Vec<ImportPiclistFailure>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AssetStats {
+    pub total: i64,
+    pub by_source: Vec<AssetStatBucket>,
+    pub by_kind: Vec<AssetStatBucket>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AssetStatBucket {
+    pub key: String,
+    pub count: i64,
 }
 
 pub struct MediaAssetsState {
@@ -217,6 +262,8 @@ pub fn init_schema(conn: &Connection) -> Result<(), String> {
             file_size     INTEGER,
             prompt        TEXT,
             source        TEXT NOT NULL DEFAULT 'manual',
+            source_ref    TEXT,
+            cdn_provider  TEXT,
             favorite      INTEGER NOT NULL DEFAULT 0,
             notes         TEXT,
             created_at    INTEGER NOT NULL,
@@ -254,6 +301,27 @@ pub fn init_schema(conn: &Connection) -> Result<(), String> {
         ",
     )
     .map_err(|e| e.to_string())?;
+    ensure_column(conn, "assets", "source_ref", "TEXT")?;
+    ensure_column(conn, "assets", "cdn_provider", "TEXT")?;
+    Ok(())
+}
+
+fn ensure_column(conn: &Connection, table: &str, column: &str, decl: &str) -> Result<(), String> {
+    let mut stmt = conn
+        .prepare(&format!("PRAGMA table_info({})", table))
+        .map_err(|e| e.to_string())?;
+    let names: Vec<String> = stmt
+        .query_map([], |r| r.get::<_, String>(1))
+        .map_err(|e| e.to_string())?
+        .filter_map(|r| r.ok())
+        .collect();
+    if !names.iter().any(|n| n == column) {
+        conn.execute(
+            &format!("ALTER TABLE {} ADD COLUMN {} {}", table, column, decl),
+            [],
+        )
+        .map_err(|e| e.to_string())?;
+    }
     Ok(())
 }
 
@@ -393,7 +461,7 @@ fn load_tags(conn: &Connection, asset_id: &str) -> Vec<MediaTag> {
 
 fn row_to_asset(conn: &Connection, r: &rusqlite::Row<'_>) -> Result<MediaAsset, rusqlite::Error> {
     let id: String = r.get(0)?;
-    let favorite_i: i64 = r.get(13)?;
+    let favorite_i: i64 = r.get(15)?;
     Ok(MediaAsset {
         id: id.clone(),
         filename: r.get(1)?,
@@ -408,17 +476,19 @@ fn row_to_asset(conn: &Connection, r: &rusqlite::Row<'_>) -> Result<MediaAsset, 
         file_size: r.get(10)?,
         prompt: r.get(11)?,
         source: r.get(12)?,
+        source_ref: r.get(13)?,
+        cdn_provider: r.get(14)?,
         favorite: favorite_i != 0,
-        notes: r.get(14)?,
-        created_at: r.get(15)?,
-        updated_at: r.get(16)?,
+        notes: r.get(16)?,
+        created_at: r.get(17)?,
+        updated_at: r.get(18)?,
         tags: load_tags(conn, &id),
     })
 }
 
 const ASSET_SELECT: &str = "SELECT id, filename, mime_type, media_kind, local_path, cdn_url,
-    content_hash, width, height, duration_ms, file_size, prompt, source, favorite, notes,
-    created_at, updated_at FROM assets";
+    content_hash, width, height, duration_ms, file_size, prompt, source, source_ref, cdn_provider,
+    favorite, notes, created_at, updated_at FROM assets";
 
 pub fn get_asset(user_data: &Path, id: &str) -> Result<Option<MediaAsset>, String> {
     let conn = open_db(user_data)?;
@@ -499,8 +569,8 @@ pub fn list_assets(
 
     let list_sql = format!(
         "SELECT a.id, a.filename, a.mime_type, a.media_kind, a.local_path, a.cdn_url,
-         a.content_hash, a.width, a.height, a.duration_ms, a.file_size, a.prompt, a.source, a.favorite, a.notes,
-         a.created_at, a.updated_at
+         a.content_hash, a.width, a.height, a.duration_ms, a.file_size, a.prompt, a.source, a.source_ref, a.cdn_provider,
+         a.favorite, a.notes, a.created_at, a.updated_at
          FROM {}{} ORDER BY a.created_at DESC LIMIT ?{} OFFSET ?{}",
         from_sql,
         where_sql,
@@ -588,7 +658,21 @@ pub fn ingest_asset(user_data: &Path, req: IngestRequest) -> Result<IngestResult
         .clone()
         .filter(|s| !s.trim().is_empty())
         .unwrap_or_else(|| "manual".into());
+    let source_ref = req
+        .source_ref
+        .as_ref()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    let cdn_provider = req
+        .cdn_provider
+        .as_ref()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
     let ts = now_ms();
+    let created_at = req
+        .created_at
+        .filter(|v| *v > 0)
+        .unwrap_or(ts);
 
     let (id, created) = if let Some(eid) = existing_id {
         conn.execute(
@@ -605,10 +689,13 @@ pub fn ingest_asset(user_data: &Path, req: IngestRequest) -> Result<IngestResult
                 file_size = COALESCE(?10, file_size),
                 prompt = COALESCE(?11, prompt),
                 source = COALESCE(NULLIF(?12, ''), source),
-                favorite = COALESCE(?13, favorite),
-                notes = COALESCE(?14, notes),
-                updated_at = ?15
-             WHERE id = ?16",
+                source_ref = COALESCE(?13, source_ref),
+                cdn_provider = COALESCE(?14, cdn_provider),
+                favorite = COALESCE(?15, favorite),
+                notes = COALESCE(?16, notes),
+                created_at = CASE WHEN ?17 > 0 THEN ?17 ELSE created_at END,
+                updated_at = ?18
+             WHERE id = ?19",
             params![
                 filename,
                 mime,
@@ -622,8 +709,11 @@ pub fn ingest_asset(user_data: &Path, req: IngestRequest) -> Result<IngestResult
                 req.file_size,
                 req.prompt,
                 source,
+                source_ref,
+                cdn_provider,
                 req.favorite.map(|b| if b { 1 } else { 0 }),
                 req.notes,
+                req.created_at.unwrap_or(0),
                 ts,
                 eid,
             ],
@@ -635,9 +725,9 @@ pub fn ingest_asset(user_data: &Path, req: IngestRequest) -> Result<IngestResult
         conn.execute(
             "INSERT INTO assets (
                 id, filename, mime_type, media_kind, local_path, cdn_url, content_hash,
-                width, height, duration_ms, file_size, prompt, source, favorite, notes,
-                created_at, updated_at
-             ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)",
+                width, height, duration_ms, file_size, prompt, source, source_ref, cdn_provider,
+                favorite, notes, created_at, updated_at
+             ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19)",
             params![
                 id,
                 filename,
@@ -652,9 +742,11 @@ pub fn ingest_asset(user_data: &Path, req: IngestRequest) -> Result<IngestResult
                 req.file_size,
                 req.prompt,
                 source,
+                source_ref,
+                cdn_provider,
                 if req.favorite.unwrap_or(false) { 1 } else { 0 },
                 req.notes,
-                ts,
+                created_at,
                 ts,
             ],
         )
@@ -823,6 +915,252 @@ pub fn list_all_tags(user_data: &Path) -> Result<Vec<MediaTag>, String> {
     Ok(rows.flatten().collect())
 }
 
+
+fn mime_from_extname(ext: &str, mime: Option<&str>) -> String {
+    if let Some(m) = mime {
+        let t = m.trim();
+        if !t.is_empty() {
+            return t.to_string();
+        }
+    }
+    let e = ext.trim().trim_start_matches('.').to_lowercase();
+    match e.as_str() {
+        "png" => "image/png".into(),
+        "jpg" | "jpeg" => "image/jpeg".into(),
+        "gif" => "image/gif".into(),
+        "webp" => "image/webp".into(),
+        "svg" => "image/svg+xml".into(),
+        "bmp" => "image/bmp".into(),
+        "mp4" => "video/mp4".into(),
+        "mov" => "video/quicktime".into(),
+        "webm" => "video/webm".into(),
+        "mp3" => "audio/mpeg".into(),
+        "wav" => "audio/wav".into(),
+        "m4a" => "audio/mp4".into(),
+        _ => String::new(),
+    }
+}
+
+fn map_piclist_provider(t: &str) -> String {
+    match t.trim().to_lowercase().as_str() {
+        "aliyun" | "aliyun_oss" => "aliyun_oss".into(),
+        "s3" | "aws" | "aws_s3" => "s3".into(),
+        "tcyun" | "qcloud" | "cos" => "tcyun".into(),
+        "qiniu" => "qiniu".into(),
+        "upyun" => "upyun".into(),
+        "github" => "github".into(),
+        "local" => "local".into(),
+        other if !other.is_empty() => other.to_string(),
+        _ => "unknown".into(),
+    }
+}
+
+fn piclist_db_path() -> Result<PathBuf, String> {
+    let home = dirs::home_dir().ok_or_else(|| "无法定位用户主目录".to_string())?;
+    Ok(home.join("Library/Application Support/piclist/piclist.db"))
+}
+
+/// Read PicList gallery JSON (gzip-compressed). Never returns or logs item `config` (secrets).
+fn read_piclist_gallery_items() -> Result<Vec<Value>, String> {
+    let path = piclist_db_path()?;
+    if !path.exists() {
+        return Err(format!("未找到 PicList 相册: {}", path.display()));
+    }
+    let raw = fs::read(&path).map_err(|e| format!("读取 PicList 相册失败: {}", e))?;
+    let json_bytes = if raw.len() >= 2 && raw[0] == 0x1f && raw[1] == 0x8b {
+        let mut dec = GzDecoder::new(&raw[..]);
+        let mut out = Vec::new();
+        dec.read_to_end(&mut out)
+            .map_err(|e| format!("解压 PicList 相册失败: {}", e))?;
+        out
+    } else {
+        raw
+    };
+    let obj: Value = serde_json::from_slice(&json_bytes)
+        .map_err(|e| format!("解析 PicList 相册 JSON 失败: {}", e))?;
+    let gallery = obj
+        .get("gallery")
+        .and_then(|g| g.as_array())
+        .cloned()
+        .unwrap_or_default();
+    Ok(gallery)
+}
+
+/// Import all PicList gallery items into the media library.
+/// HARD RULE: never read/copy/log item `config` (contains AccessKey/Secret).
+pub fn import_piclist_gallery(user_data: &Path) -> Result<ImportPiclistResult, String> {
+    let gallery = read_piclist_gallery_items()?;
+    let total = gallery.len() as i64;
+    let mut inserted = 0i64;
+    let mut updated = 0i64;
+    let skipped = 0i64;
+    let mut failed = 0i64;
+    let mut failures: Vec<ImportPiclistFailure> = Vec::new();
+
+    for item in gallery {
+        // IMPORTANT: never touch item["config"] — it holds image-bed secrets.
+        let id = item.get("id").and_then(|v| v.as_str()).map(|s| s.to_string());
+        let img_url = item
+            .get("imgUrl")
+            .and_then(|v| v.as_str())
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+
+        let img_url = match img_url {
+            Some(u) => u,
+            None => {
+                failed += 1;
+                if failures.len() < 50 {
+                    failures.push(ImportPiclistFailure {
+                        id,
+                        img_url: None,
+                        reason: "missing imgUrl".into(),
+                    });
+                }
+                continue;
+            }
+        };
+
+        let file_name = item
+            .get("fileName")
+            .and_then(|v| v.as_str())
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+        let extname = item
+            .get("extname")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let mime_opt = item.get("mimeType").and_then(|v| v.as_str());
+        let mime = mime_from_extname(extname, mime_opt);
+        let width = item.get("width").and_then(|v| v.as_i64()).or_else(|| {
+            item.get("width")
+                .and_then(|v| v.as_f64())
+                .map(|f| f as i64)
+        });
+        let height = item.get("height").and_then(|v| v.as_i64()).or_else(|| {
+            item.get("height")
+                .and_then(|v| v.as_f64())
+                .map(|f| f as i64)
+        });
+        let created_at = item.get("createdAt").and_then(|v| v.as_i64()).filter(|v| *v > 0);
+        let provider_raw = item.get("type").and_then(|v| v.as_str()).unwrap_or("");
+        let cdn_provider = map_piclist_provider(provider_raw);
+
+        let local_path = item
+            .get("filePath")
+            .and_then(|v| v.as_str())
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .filter(|s| Path::new(s).is_file());
+
+        let filename = file_name.clone().unwrap_or_else(|| {
+            filename_from_path_or_url(&local_path, &Some(img_url.clone()))
+        });
+        let media_kind = infer_media_kind(&mime, &filename);
+
+        let req = IngestRequest {
+            cdn_url: Some(img_url.clone()),
+            local_path,
+            filename: Some(filename),
+            mime_type: if mime.is_empty() { None } else { Some(mime) },
+            media_kind: Some(media_kind),
+            content_hash: None,
+            width,
+            height,
+            duration_ms: None,
+            file_size: None,
+            prompt: None,
+            source: Some("piclist-import".into()),
+            source_ref: id.clone(),
+            cdn_provider: Some(cdn_provider),
+            favorite: None,
+            notes: None,
+            created_at,
+            tags: vec![],
+            purpose_tags: vec!["piclist".into()],
+            style_tags: vec![],
+        };
+
+        match ingest_asset(user_data, req) {
+            Ok(res) => {
+                if res.created {
+                    inserted += 1;
+                } else {
+                    updated += 1;
+                }
+            }
+            Err(e) => {
+                failed += 1;
+                if failures.len() < 50 {
+                    failures.push(ImportPiclistFailure {
+                        id,
+                        img_url: Some(img_url),
+                        reason: e,
+                    });
+                }
+            }
+        }
+    }
+
+    Ok(ImportPiclistResult {
+        total,
+        inserted,
+        updated,
+        skipped,
+        failed,
+        failures,
+    })
+}
+
+pub fn asset_stats(user_data: &Path) -> Result<AssetStats, String> {
+    let conn = open_db(user_data)?;
+    init_schema(&conn)?;
+    let total: i64 = conn
+        .query_row("SELECT COUNT(*) FROM assets", [], |r| r.get(0))
+        .map_err(|e| e.to_string())?;
+
+    let by_source = {
+        let mut stmt = conn
+            .prepare(
+                "SELECT COALESCE(NULLIF(source, ''), 'unknown') AS k, COUNT(*) FROM assets GROUP BY k ORDER BY COUNT(*) DESC",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok(AssetStatBucket {
+                    key: r.get(0)?,
+                    count: r.get(1)?,
+                })
+            })
+            .map_err(|e| e.to_string())?;
+        rows.filter_map(|r| r.ok()).collect()
+    };
+
+    let by_kind = {
+        let mut stmt = conn
+            .prepare(
+                "SELECT COALESCE(NULLIF(media_kind, ''), 'other') AS k, COUNT(*) FROM assets GROUP BY k ORDER BY COUNT(*) DESC",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok(AssetStatBucket {
+                    key: r.get(0)?,
+                    count: r.get(1)?,
+                })
+            })
+            .map_err(|e| e.to_string())?;
+        rows.filter_map(|r| r.ok()).collect()
+    };
+
+    Ok(AssetStats {
+        total,
+        by_source,
+        by_kind,
+    })
+}
+
+
 // ──────────────────────────────────────────────────
 // Tauri commands
 // ──────────────────────────────────────────────────
@@ -912,6 +1250,29 @@ pub fn media_assets_delete(
     delete_asset(&user_data, &id)
 }
 
+
+#[tauri::command]
+pub fn media_assets_import_piclist(
+    state: State<SharedMediaAssetsState>,
+) -> Result<ImportPiclistResult, String> {
+    let user_data = {
+        let g = state.lock().map_err(|e| e.to_string())?;
+        g.user_data_dir.clone()
+    };
+    import_piclist_gallery(&user_data)
+}
+
+#[tauri::command]
+pub fn media_assets_stats(
+    state: State<SharedMediaAssetsState>,
+) -> Result<AssetStats, String> {
+    let user_data = {
+        let g = state.lock().map_err(|e| e.to_string())?;
+        g.user_data_dir.clone()
+    };
+    asset_stats(&user_data)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -941,8 +1302,11 @@ mod tests {
                 file_size: Some(1234),
                 prompt: Some("cat".into()),
                 source: Some("piclist".into()),
+                source_ref: None,
+                cdn_provider: None,
                 favorite: None,
                 notes: None,
+                created_at: Some(1_700_000_000_000),
                 tags: vec!["配图".into()],
                 purpose_tags: vec![],
                 style_tags: vec!["扁平".into()],
@@ -966,8 +1330,11 @@ mod tests {
                 file_size: None,
                 prompt: Some("cat v2".into()),
                 source: Some("piclist".into()),
+                source_ref: Some("pic-1".into()),
+                cdn_provider: Some("aliyun_oss".into()),
                 favorite: Some(true),
                 notes: None,
+                created_at: Some(1_700_000_000_000),
                 tags: vec![],
                 purpose_tags: vec![],
                 style_tags: vec![],
@@ -982,6 +1349,8 @@ mod tests {
         let listed = list_assets(&ud, 10, 0, None, Some("image"), false, None).unwrap();
         assert_eq!(listed.total, 1);
         assert_eq!(listed.items[0].tags.len(), 2);
+        assert_eq!(r1.asset.created_at, 1_700_000_000_000);
+        assert_eq!(r2.asset.created_at, 1_700_000_000_000);
 
         let _ = fs::remove_dir_all(&ud);
     }
@@ -1004,8 +1373,11 @@ mod tests {
                 file_size: Some(12),
                 prompt: None,
                 source: Some("test".into()),
+                source_ref: None,
+                cdn_provider: None,
                 favorite: None,
                 notes: None,
+                created_at: None,
                 tags: vec![],
                 purpose_tags: vec![],
                 style_tags: vec![],

@@ -1444,6 +1444,7 @@ dependencies = [
  "cbc",
  "clap",
  "dirs 5.0.1",
+ "flate2",
  "hex",
  "hmac",
  "httpdate",

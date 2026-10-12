@@ -370,6 +370,8 @@ pub fn run() {
             media_assets::media_assets_update,
             media_assets::media_assets_list_tags,
             media_assets::media_assets_delete,
+            media_assets::media_assets_import_piclist,
+            media_assets::media_assets_stats,
             // CDN / Image bed
             cdn::cdn_get_config,
             cdn::cdn_save_config,

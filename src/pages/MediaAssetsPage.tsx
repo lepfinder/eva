@@ -4,6 +4,7 @@ import {
   Search,
   Star,
   RefreshCw,
+  Upload,
   Film,
   Music,
   File,
@@ -38,6 +39,8 @@ interface MediaAsset {
   fileSize?: number | null
   prompt?: string | null
   source: string
+  sourceRef?: string | null
+  cdnProvider?: string | null
   favorite: boolean
   notes?: string | null
   createdAt: number
@@ -88,6 +91,8 @@ export function MediaAssetsPage() {
   const [error, setError] = useState<string | null>(null)
   const [deleting, setDeleting] = useState(false)
   const [copied, setCopied] = useState(false)
+  const [importing, setImporting] = useState(false)
+  const [importMsg, setImportMsg] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -163,6 +168,36 @@ export function MediaAssetsPage() {
     }
   }
 
+
+  const importPiclistGallery = async () => {
+    if (importing) return
+    setImporting(true)
+    setImportMsg(null)
+    setError(null)
+    try {
+      const res = await invoke<{
+        total: number
+        inserted: number
+        updated: number
+        skipped: number
+        failed: number
+        failures: { id?: string; imgUrl?: string; reason: string }[]
+      }>('media_assets_import_piclist')
+      const failHint =
+        res.failed > 0 && res.failures?.length
+          ? `；失败例: ${res.failures[0].reason}`
+          : ''
+      setImportMsg(
+        `PicList 相册 ${res.total} 项 → 新增 ${res.inserted} / 更新 ${res.updated} / 跳过 ${res.skipped} / 失败 ${res.failed}${failHint}`,
+      )
+      await load()
+    } catch (e) {
+      setError(String(e))
+    } finally {
+      setImporting(false)
+    }
+  }
+
   return (
     <div className="flex h-full flex-col gap-4">
       <div className="flex items-start justify-between gap-4">
@@ -176,6 +211,15 @@ export function MediaAssetsPage() {
           <Badge variant="secondary" className="font-mono text-[11px]">
             {total} 项
           </Badge>
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => void importPiclistGallery()}
+            disabled={importing || loading}
+          >
+            <Upload className={clsx('h-4 w-4 mr-1.5', importing && 'animate-pulse')} />
+            {importing ? '导入中…' : '从 PicList 导入相册'}
+          </Button>
           <Button variant="outline" size="sm" onClick={() => void load()} disabled={loading}>
             <RefreshCw className={clsx('h-4 w-4 mr-1.5', loading && 'animate-spin')} />
             刷新
@@ -229,6 +273,11 @@ export function MediaAssetsPage() {
           {error}
         </div>
       )}
+      {importMsg && (
+        <div className="rounded-md border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-700 dark:text-emerald-300">
+          {importMsg}
+        </div>
+      )}
 
       <div className="flex-1 overflow-auto rounded-lg border bg-card/30 p-3">
         {items.length === 0 && !loading ? (
@@ -236,7 +285,7 @@ export function MediaAssetsPage() {
             <ImageIcon className="h-10 w-10 opacity-30" />
             <p className="text-sm">还没有素材</p>
             <p className="text-xs opacity-70">
-              用 PicList 上传后钩子会自动入库，或 <code className="font-mono">POST /api/assets/ingest</code>
+              点右上角「从 PicList 导入相册」，或粘贴上传 / <code className="font-mono">POST /api/assets/ingest</code>
             </p>
           </div>
         ) : (

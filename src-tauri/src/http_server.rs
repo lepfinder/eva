@@ -513,6 +513,31 @@ fn start_server_thread(
                     }
                 }
 
+
+                // 14b. Media Assets: Import PicList gallery (no body; never copies secrets)
+                (Method::Post, "/api/assets/import-piclist") => {
+                    match media_assets::import_piclist_gallery(&user_data_dir) {
+                        Ok(result) => {
+                            let _ = request.respond(json_response(&result, 200));
+                        }
+                        Err(e) => {
+                            let _ = request.respond(error_response(&e, 500));
+                        }
+                    }
+                }
+
+                // 14c. Media Assets: Stats
+                (Method::Get, "/api/assets/stats") => {
+                    match media_assets::asset_stats(&user_data_dir) {
+                        Ok(stats) => {
+                            let _ = request.respond(json_response(&stats, 200));
+                        }
+                        Err(e) => {
+                            let _ = request.respond(error_response(&e, 500));
+                        }
+                    }
+                }
+
                 // 15. Media Assets: List
                 (Method::Get, "/api/assets") | (Method::Get, "/api/assets/list") => {
                     let limit: i64 = query_map.get("limit").and_then(|l| l.parse().ok()).unwrap_or(60);
