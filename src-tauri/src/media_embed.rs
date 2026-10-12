@@ -1,7 +1,7 @@
 //! Media asset embeddings — Ollama EmbeddingGemma 2 for semantic search + coarse auto-tags.
 //!
 //! Vectors live in media-assets.db (`asset_embeddings`). Config: userData/media_embed_config.json.
-//! Image caption VLM is stubbed in config for a later pass; search does not depend on it.
+//! Optional image caption via Ollama VLM (`captionModel`); search does not depend on it.
 
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use reqwest::blocking::Client;
@@ -16,7 +16,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Manager, State};
 
 use crate::media_assets::{
-    ensure_tag, get_asset, init_schema, load_tags, open_db, MediaAsset,
+    ensure_tag, get_asset, init_schema, load_tags, open_db, set_asset_caption, MediaAsset,
 };
 
 const CONFIG_FILENAME: &str = "media_embed_config.json";
@@ -66,7 +66,7 @@ impl Default for MediaEmbedConfig {
             ollama_base_url: default_base_url(),
             model: default_model(),
             auto_tag: true,
-            caption_model: String::new(),
+            caption_model: "qwen3-vl:8b".into(),
             caption_enabled: false,
         }
     }
@@ -863,6 +863,233 @@ pub fn test_ollama(user_data: &Path) -> Result<Value, String> {
 }
 
 // ──────────────────────────────────────────────────
+// Asset embed status + caption
+// ──────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AssetEmbedInfo {
+    pub asset_id: String,
+    /// `ok` | `error` | `pending`
+    pub status: String,
+    pub model: Option<String>,
+    pub indexed_at: Option<i64>,
+    pub error_msg: Option<String>,
+    pub dims: Option<i64>,
+    pub caption: Option<String>,
+    pub queued: bool,
+}
+
+fn load_embed_info(conn: &Connection, asset_id: &str) -> AssetEmbedInfo {
+    let queued: bool = conn
+        .query_row(
+            "SELECT 1 FROM embed_queue WHERE asset_id = ?1",
+            params![asset_id],
+            |_| Ok(true),
+        )
+        .unwrap_or(false);
+
+    let row = conn.query_row(
+        "SELECT status, model, indexed_at, error_msg, dims FROM asset_embeddings WHERE asset_id = ?1",
+        params![asset_id],
+        |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, i64>(2)?,
+                r.get::<_, Option<String>>(3)?,
+                r.get::<_, i64>(4)?,
+            ))
+        },
+    );
+
+    let caption: Option<String> = conn
+        .query_row(
+            "SELECT caption FROM assets WHERE id = ?1",
+            params![asset_id],
+            |r| r.get::<_, Option<String>>(0),
+        )
+        .ok()
+        .flatten()
+        .filter(|s| !s.trim().is_empty());
+
+    match row {
+        Ok((status, model, indexed_at, error_msg, dims)) => AssetEmbedInfo {
+            asset_id: asset_id.to_string(),
+            status: if status == "ok" {
+                "ok".into()
+            } else if status == "error" {
+                "error".into()
+            } else {
+                "pending".into()
+            },
+            model: Some(model),
+            indexed_at: Some(indexed_at),
+            error_msg,
+            dims: if dims > 0 { Some(dims) } else { None },
+            caption,
+            queued,
+        },
+        Err(_) => AssetEmbedInfo {
+            asset_id: asset_id.to_string(),
+            status: "pending".into(),
+            model: None,
+            indexed_at: None,
+            error_msg: None,
+            dims: None,
+            caption,
+            queued,
+        },
+    }
+}
+
+pub fn get_asset_embed_info(user_data: &Path, asset_id: &str) -> Result<AssetEmbedInfo, String> {
+    let conn = open_db(user_data)?;
+    init_schema(&conn)?;
+    ensure_embed_schema(&conn)?;
+    let exists: bool = conn
+        .query_row(
+            "SELECT 1 FROM assets WHERE id = ?1",
+            params![asset_id],
+            |_| Ok(true),
+        )
+        .unwrap_or(false);
+    if !exists {
+        return Err("asset not found".into());
+    }
+    Ok(load_embed_info(&conn, asset_id))
+}
+
+/// Lightweight status map for grid badges. Keys = asset ids in current DB.
+pub fn list_embed_statuses(user_data: &Path) -> Result<Vec<AssetEmbedInfo>, String> {
+    let conn = open_db(user_data)?;
+    init_schema(&conn)?;
+    ensure_embed_schema(&conn)?;
+
+    let mut stmt = conn
+        .prepare(
+            "SELECT a.id,
+                CASE
+                  WHEN e.status = 'ok' THEN 'ok'
+                  WHEN e.status = 'error' THEN 'error'
+                  ELSE 'pending'
+                END AS st,
+                e.model,
+                e.indexed_at,
+                e.error_msg,
+                e.dims,
+                a.caption,
+                CASE WHEN q.asset_id IS NOT NULL THEN 1 ELSE 0 END AS queued
+             FROM assets a
+             LEFT JOIN asset_embeddings e ON e.asset_id = a.id
+             LEFT JOIN embed_queue q ON q.asset_id = a.id",
+        )
+        .map_err(|e| e.to_string())?;
+
+    let rows = stmt
+        .query_map([], |r| {
+            let caption: Option<String> = r.get(6)?;
+            Ok(AssetEmbedInfo {
+                asset_id: r.get(0)?,
+                status: r.get(1)?,
+                model: r.get(2)?,
+                indexed_at: r.get(3)?,
+                error_msg: r.get(4)?,
+                dims: {
+                    let d: Option<i64> = r.get(5)?;
+                    d.filter(|x| *x > 0)
+                },
+                caption: caption.filter(|s| !s.trim().is_empty()),
+                queued: r.get::<_, i64>(7)? != 0,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+
+    Ok(rows.filter_map(|r| r.ok()).collect())
+}
+
+fn load_image_bytes_for_vlm(asset: &MediaAsset) -> Result<Vec<u8>, String> {
+    if let Some(ref lp) = asset.local_path {
+        let p = Path::new(lp);
+        if p.is_file() {
+            if let Ok(raw) = read_bytes_from_path(p) {
+                return shrink_image_jpeg(&raw, 1024).or(Ok(raw));
+            }
+        }
+    }
+    if let Some(ref url) = asset.cdn_url {
+        let raw = download_bytes(url)?;
+        return shrink_image_jpeg(&raw, 1024).or(Ok(raw));
+    }
+    Err("no local file or cdn url for caption".into())
+}
+
+/// Generate a short Chinese caption with the configured Ollama VLM and store on the asset.
+pub fn generate_caption(user_data: &Path, asset_id: &str) -> Result<AssetEmbedInfo, String> {
+    let cfg = load_config(user_data);
+    let model = {
+        let m = cfg.caption_model.trim();
+        if m.is_empty() {
+            "qwen3-vl:8b".to_string()
+        } else {
+            m.to_string()
+        }
+    };
+    let asset = get_asset(user_data, asset_id)?.ok_or_else(|| "asset not found".to_string())?;
+    let is_image = asset.media_kind == "image"
+        || asset.mime_type.to_lowercase().starts_with("image/");
+    if !is_image {
+        return Err("caption is only supported for images".into());
+    }
+
+    let jpeg = load_image_bytes_for_vlm(&asset)?;
+    let b64 = B64.encode(&jpeg);
+    let client = http_client()?;
+    let url = format!(
+        "{}/api/chat",
+        cfg.ollama_base_url.trim_end_matches('/')
+    );
+    let body = json!({
+        "model": model,
+        "stream": false,
+        "messages": [{
+            "role": "user",
+            "content": "请用中文简要描述这张图片的主要内容、主体和风格，一到三句。只输出描述本身，不要前缀。",
+            "images": [b64],
+        }],
+    });
+    let resp = client
+        .post(&url)
+        .json(&body)
+        .send()
+        .map_err(|e| format!("ollama chat request failed: {e}"))?;
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let t = resp.text().unwrap_or_default();
+        return Err(format!("ollama chat HTTP {status}: {t}"));
+    }
+    let parsed: Value = resp
+        .json()
+        .map_err(|e| format!("ollama chat parse: {e}"))?;
+    let mut text = parsed
+        .pointer("/message/content")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    // Strip common think / reasoning wrappers if a model emits them
+    if let Some(idx) = text.rfind("</think>") {
+        text = text[idx + "</think>".len()..].trim().to_string();
+    }
+    if text.is_empty() {
+        return Err("ollama returned empty caption".into());
+    }
+    set_asset_caption(user_data, asset_id, &text)?;
+    get_asset_embed_info(user_data, asset_id)
+}
+
+
+// ──────────────────────────────────────────────────
 // Tauri commands
 // ──────────────────────────────────────────────────
 
@@ -967,6 +1194,32 @@ pub fn media_embed_semantic_search(
         limit.unwrap_or(60),
         media_kind.as_deref(),
     )
+}
+
+#[tauri::command]
+pub fn media_embed_list_statuses(
+    state: State<SharedMediaEmbedState>,
+) -> Result<Vec<AssetEmbedInfo>, String> {
+    let ud = user_data_from_embed(&state)?;
+    list_embed_statuses(&ud)
+}
+
+#[tauri::command]
+pub fn media_embed_get_asset_info(
+    state: State<SharedMediaEmbedState>,
+    asset_id: String,
+) -> Result<AssetEmbedInfo, String> {
+    let ud = user_data_from_embed(&state)?;
+    get_asset_embed_info(&ud, &asset_id)
+}
+
+#[tauri::command]
+pub fn media_embed_generate_caption(
+    state: State<SharedMediaEmbedState>,
+    asset_id: String,
+) -> Result<AssetEmbedInfo, String> {
+    let ud = user_data_from_embed(&state)?;
+    generate_caption(&ud, &asset_id)
 }
 
 /// Called after ingest — enqueue then index one asset on a background thread.

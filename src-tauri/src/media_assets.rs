@@ -41,6 +41,9 @@ pub struct MediaAsset {
     pub cdn_provider: Option<String>,
     pub favorite: bool,
     pub notes: Option<String>,
+    /// AI / VLM image caption (Chinese or other). Optional.
+    #[serde(default)]
+    pub caption: Option<String>,
     pub created_at: i64,
     pub updated_at: i64,
     #[serde(default)]
@@ -93,6 +96,7 @@ pub struct UpdateAssetRequest {
     pub filename: Option<String>,
     pub prompt: Option<String>,
     pub notes: Option<String>,
+    pub caption: Option<String>,
     pub favorite: Option<bool>,
     pub media_kind: Option<String>,
     #[serde(default)]
@@ -303,6 +307,7 @@ pub fn init_schema(conn: &Connection) -> Result<(), String> {
     .map_err(|e| e.to_string())?;
     ensure_column(conn, "assets", "source_ref", "TEXT")?;
     ensure_column(conn, "assets", "cdn_provider", "TEXT")?;
+    ensure_column(conn, "assets", "caption", "TEXT")?;
     Ok(())
 }
 
@@ -480,6 +485,7 @@ fn row_to_asset(conn: &Connection, r: &rusqlite::Row<'_>) -> Result<MediaAsset, 
         cdn_provider: r.get(14)?,
         favorite: favorite_i != 0,
         notes: r.get(16)?,
+        caption: r.get(19)?,
         created_at: r.get(17)?,
         updated_at: r.get(18)?,
         tags: load_tags(conn, &id),
@@ -488,7 +494,7 @@ fn row_to_asset(conn: &Connection, r: &rusqlite::Row<'_>) -> Result<MediaAsset, 
 
 const ASSET_SELECT: &str = "SELECT id, filename, mime_type, media_kind, local_path, cdn_url,
     content_hash, width, height, duration_ms, file_size, prompt, source, source_ref, cdn_provider,
-    favorite, notes, created_at, updated_at FROM assets";
+    favorite, notes, created_at, updated_at, caption FROM assets";
 
 pub fn get_asset(user_data: &Path, id: &str) -> Result<Option<MediaAsset>, String> {
     let conn = open_db(user_data)?;
@@ -570,7 +576,7 @@ pub fn list_assets(
     let list_sql = format!(
         "SELECT a.id, a.filename, a.mime_type, a.media_kind, a.local_path, a.cdn_url,
          a.content_hash, a.width, a.height, a.duration_ms, a.file_size, a.prompt, a.source, a.source_ref, a.cdn_provider,
-         a.favorite, a.notes, a.created_at, a.updated_at
+         a.favorite, a.notes, a.created_at, a.updated_at, a.caption
          FROM {}{} ORDER BY a.created_at DESC LIMIT ?{} OFFSET ?{}",
         from_sql,
         where_sql,
@@ -808,14 +814,16 @@ pub fn update_asset(
             filename = COALESCE(?1, filename),
             prompt = COALESCE(?2, prompt),
             notes = COALESCE(?3, notes),
-            favorite = COALESCE(?4, favorite),
-            media_kind = COALESCE(?5, media_kind),
-            updated_at = ?6
-         WHERE id = ?7",
+            caption = COALESCE(?4, caption),
+            favorite = COALESCE(?5, favorite),
+            media_kind = COALESCE(?6, media_kind),
+            updated_at = ?7
+         WHERE id = ?8",
         params![
             req.filename,
             req.prompt,
             req.notes,
+            req.caption,
             req.favorite.map(|b| if b { 1 } else { 0 }),
             req.media_kind,
             ts,
@@ -851,6 +859,47 @@ pub fn update_asset(
     }
 
     get_asset(user_data, id)?.ok_or_else(|| "asset missing after update".into())
+}
+
+/// Persist AI caption and fold it into FTS notes for keyword search.
+pub fn set_asset_caption(user_data: &Path, id: &str, caption: &str) -> Result<MediaAsset, String> {
+    let conn = open_db(user_data)?;
+    init_schema(&conn)?;
+    let ts = now_ms();
+    let n = conn
+        .execute(
+            "UPDATE assets SET caption = ?1, updated_at = ?2 WHERE id = ?3",
+            params![caption, ts, id],
+        )
+        .map_err(|e| e.to_string())?;
+    if n == 0 {
+        return Err("asset not found".into());
+    }
+    let (filename, prompt, notes, cap): (String, String, String, String) = conn
+        .query_row(
+            "SELECT filename, COALESCE(prompt,''), COALESCE(notes,''), COALESCE(caption,'') FROM assets WHERE id = ?1",
+            params![id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )
+        .map_err(|e| e.to_string())?;
+    let tag_names: String = load_tags(&conn, id)
+        .into_iter()
+        .map(|t| t.name)
+        .collect::<Vec<_>>()
+        .join(" ");
+    let fts_notes = if notes.is_empty() {
+        cap.clone()
+    } else if cap.is_empty() {
+        notes.clone()
+    } else {
+        format!("{notes}\n{cap}")
+    };
+    let _ = conn.execute("DELETE FROM assets_fts WHERE id = ?1", params![id]);
+    let _ = conn.execute(
+        "INSERT INTO assets_fts (id, filename, prompt, notes, tags) VALUES (?1,?2,?3,?4,?5)",
+        params![id, filename, prompt, fts_notes, tag_names],
+    );
+    get_asset(user_data, id)?.ok_or_else(|| "asset missing after caption update".into())
 }
 
 /// Delete an asset: cloud object first (if cdn_url), then DB row (+ FTS / tags) and optional local file.

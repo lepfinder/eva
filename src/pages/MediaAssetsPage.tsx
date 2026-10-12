@@ -64,6 +64,7 @@ interface MediaAsset {
   cdnProvider?: string | null
   favorite: boolean
   notes?: string | null
+  caption?: string | null
   createdAt: number
   updatedAt: number
   tags: MediaTag[]
@@ -95,6 +96,17 @@ interface MediaEmbedConfig {
   autoTag: boolean
   captionModel: string
   captionEnabled: boolean
+}
+
+interface AssetEmbedInfo {
+  assetId: string
+  status: 'ok' | 'error' | 'pending' | string
+  model?: string | null
+  indexedAt?: number | null
+  errorMsg?: string | null
+  dims?: number | null
+  caption?: string | null
+  queued: boolean
 }
 
 function KindIcon({ kind }: { kind: string }) {
@@ -137,6 +149,42 @@ function formatCardTime(ms: number): string {
   const pad = (n: number) => String(n).padStart(2, '0')
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
 }
+
+function embedStatusLabel(status?: string | null, queued?: boolean): string {
+  if (status === 'ok') return '已索引'
+  if (status === 'error') return '索引失败'
+  if (queued) return '排队中'
+  return '未索引'
+}
+
+function EmbedStatusBadge({ info }: { info?: AssetEmbedInfo | null }) {
+  const status = info?.status ?? 'pending'
+  const label = embedStatusLabel(status, info?.queued)
+  const cls =
+    status === 'ok'
+      ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400'
+      : status === 'error'
+        ? 'border-destructive/40 bg-destructive/10 text-destructive'
+        : 'border-border/80 bg-background/90 text-muted-foreground'
+  return (
+    <span
+      className={clsx(
+        'absolute left-2 top-2 z-[5] rounded-full border px-1.5 py-0.5 text-[10px] font-medium leading-none shadow-sm backdrop-blur-sm',
+        cls,
+      )}
+      title={
+        status === 'error' && info?.errorMsg
+          ? info.errorMsg
+          : status === 'ok' && info?.indexedAt
+            ? `索引于 ${formatTime(info.indexedAt)}`
+            : label
+      }
+    >
+      {label}
+    </span>
+  )
+}
+
 
 const IMAGE_EXT = new Set([
   'png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'heic', 'heif', 'avif',
@@ -223,6 +271,9 @@ export function MediaAssetsPage() {
   const [semanticMode, setSemanticMode] = useState(false)
   const [indexing, setIndexing] = useState(false)
   const [embedStats, setEmbedStats] = useState<EmbedStats | null>(null)
+  const [embedStatusMap, setEmbedStatusMap] = useState<Record<string, AssetEmbedInfo>>({})
+  const [detailEmbed, setDetailEmbed] = useState<AssetEmbedInfo | null>(null)
+  const [captionGenerating, setCaptionGenerating] = useState(false)
   const [embedCfgOpen, setEmbedCfgOpen] = useState(false)
   const [embedCfg, setEmbedCfg] = useState<MediaEmbedConfig | null>(null)
   const [embedCfgSaving, setEmbedCfgSaving] = useState(false)
@@ -238,6 +289,14 @@ export function MediaAssetsPage() {
       setEmbedStats(s)
     } catch {
       /* ignore if backend not ready */
+    }
+    try {
+      const list = await invoke<AssetEmbedInfo[]>('media_embed_list_statuses')
+      const map: Record<string, AssetEmbedInfo> = {}
+      for (const info of list) map[info.assetId] = info
+      setEmbedStatusMap(map)
+    } catch {
+      /* ignore */
     }
   }, [])
 
@@ -281,6 +340,54 @@ export function MediaAssetsPage() {
   useEffect(() => {
     void load()
   }, [load])
+
+  useEffect(() => {
+    if (!selected) {
+      setDetailEmbed(null)
+      return
+    }
+    let cancelled = false
+    void (async () => {
+      try {
+        const info = await invoke<AssetEmbedInfo>('media_embed_get_asset_info', {
+          assetId: selected.id,
+        })
+        if (!cancelled) setDetailEmbed(info)
+      } catch {
+        if (!cancelled) {
+          setDetailEmbed(embedStatusMap[selected.id] ?? null)
+        }
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selected?.id])
+
+  const generateCaption = async () => {
+    if (!selected || captionGenerating) return
+    setCaptionGenerating(true)
+    setError(null)
+    try {
+      const info = await invoke<AssetEmbedInfo>('media_embed_generate_caption', {
+        assetId: selected.id,
+      })
+      setDetailEmbed(info)
+      setEmbedStatusMap((prev) => ({ ...prev, [info.assetId]: info }))
+      if (info.caption) {
+        setSelected({ ...selected, caption: info.caption })
+        setItems((prev) =>
+          prev.map((a) => (a.id === selected.id ? { ...a, caption: info.caption } : a)),
+        )
+      }
+      showToast('描述已生成')
+    } catch (e) {
+      setError(String(e))
+    } finally {
+      setCaptionGenerating(false)
+    }
+  }
 
   const toggleFavorite = async (asset: MediaAsset) => {
     try {
@@ -772,6 +879,7 @@ export function MediaAssetsPage() {
                         ) : (
                           <KindIcon kind={asset.mediaKind} />
                         )}
+                        <EmbedStatusBadge info={embedStatusMap[asset.id]} />
                       </div>
                       <div className="p-2 space-y-1">
                         <div className="flex items-start gap-1">
@@ -980,6 +1088,73 @@ export function MediaAssetsPage() {
                   </div>
                 )}
 
+                <div className="rounded-lg border bg-muted/20 p-3 space-y-2 text-sm">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-medium">语义索引</span>
+                    <Badge
+                      variant="outline"
+                      className={clsx(
+                        'text-[10px]',
+                        detailEmbed?.status === 'ok' && 'border-emerald-500/40 text-emerald-700 dark:text-emerald-400',
+                        detailEmbed?.status === 'error' && 'border-destructive/40 text-destructive',
+                      )}
+                    >
+                      {embedStatusLabel(detailEmbed?.status, detailEmbed?.queued)}
+                    </Badge>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2 text-xs text-muted-foreground">
+                    <div>
+                      <span className="block opacity-70">模型</span>
+                      <span className="text-foreground font-mono">{detailEmbed?.model || '—'}</span>
+                    </div>
+                    <div>
+                      <span className="block opacity-70">索引时间</span>
+                      <span className="text-foreground">
+                        {detailEmbed?.indexedAt ? formatTime(detailEmbed.indexedAt) : '—'}
+                      </span>
+                    </div>
+                    {detailEmbed?.dims ? (
+                      <div>
+                        <span className="block opacity-70">维度</span>
+                        <span className="text-foreground">{detailEmbed.dims}</span>
+                      </div>
+                    ) : null}
+                  </div>
+                  {detailEmbed?.status === 'error' && detailEmbed.errorMsg && (
+                    <p className="text-xs text-destructive whitespace-pre-wrap">{detailEmbed.errorMsg}</p>
+                  )}
+                  <div className="pt-1 space-y-1.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-muted-foreground text-xs">AI 描述</span>
+                      {selected.mediaKind === 'image' && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="h-7 text-xs"
+                          disabled={captionGenerating}
+                          onClick={() => void generateCaption()}
+                        >
+                          {captionGenerating ? (
+                            <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />
+                          ) : (
+                            <Sparkles className="h-3.5 w-3.5 mr-1" />
+                          )}
+                          {detailEmbed?.caption || selected.caption ? '重新生成' : '生成描述'}
+                        </Button>
+                      )}
+                    </div>
+                    {(detailEmbed?.caption || selected.caption) ? (
+                      <p className="text-xs whitespace-pre-wrap rounded-md border bg-background p-2">
+                        {detailEmbed?.caption || selected.caption}
+                      </p>
+                    ) : (
+                      <p className="text-xs text-muted-foreground">
+                        暂无描述。可用 Ollama 视觉模型（默认 qwen3-vl:8b）生成；自动标签见上方 tags。
+                      </p>
+                    )}
+                  </div>
+                </div>
+
                 {error && (
                   <div className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive whitespace-pre-wrap">
                     {error}
@@ -1056,7 +1231,7 @@ export function MediaAssetsPage() {
               <div>
                 <h2 className="text-base font-semibold">语义索引 · Ollama</h2>
                 <p className="text-xs text-muted-foreground mt-1">
-                  EmbeddingGemma 2 本地向量；自动打标先用近邻标签。画面 caption VLM 预留配置，暂不强制。
+                  EmbeddingGemma 2 本地向量；自动打标用近邻标签。详情页可选用 VLM 生成中文描述。
                 </p>
               </div>
               {embedCfg && (
@@ -1093,14 +1268,15 @@ export function MediaAssetsPage() {
                       onChange={(e) => setEmbedCfg({ ...embedCfg, model: e.target.value })}
                     />
                   </div>
-                  <div className="space-y-1 opacity-60">
-                    <div className="text-xs text-muted-foreground">Caption VLM（预留，未启用）</div>
+                  <div className="space-y-1">
+                    <div className="text-xs text-muted-foreground">描述模型（Ollama VLM）</div>
                     <input
                       className="w-full h-9 rounded-md border bg-background px-3 text-sm"
                       value={embedCfg.captionModel}
-                      placeholder="例如 qwen3-vl:8b"
+                      placeholder="qwen3-vl:8b"
                       onChange={(e) => setEmbedCfg({ ...embedCfg, captionModel: e.target.value })}
                     />
+                    <p className="text-[10px] text-muted-foreground">详情页「生成描述」使用此模型；需本机已 pull。</p>
                   </div>
                   <div className="flex items-center gap-2 pt-1">
                     <Button size="sm" variant="outline" onClick={() => void testEmbed()}>

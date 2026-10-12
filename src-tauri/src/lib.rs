@@ -386,6 +386,9 @@ pub fn run() {
             media_embed::media_embed_process_queue,
             media_embed::media_embed_index_one,
             media_embed::media_embed_semantic_search,
+            media_embed::media_embed_list_statuses,
+            media_embed::media_embed_get_asset_info,
+            media_embed::media_embed_generate_caption,
             // CDN / Image bed
             cdn::cdn_get_config,
             cdn::cdn_save_config,
