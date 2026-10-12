@@ -38,6 +38,8 @@ export function MainLayoutContents(): React.ReactElement {
   const [activeNav, setActiveNav] = useState<NavItem>('dashboard')
   // 子工具标题后缀（用于 Toolbox 等页面）
   const [subTitle, setSubTitle] = useState<string | null>(null)
+  // 打开设置页时可指定初始 tab（如素材库跳转「图床」）
+  const [settingsInitialTab, setSettingsInitialTab] = useState<string | null>(null)
 
   // 动态更新窗口标题
   useEffect(() => {
@@ -73,6 +75,7 @@ export function MainLayoutContents(): React.ReactElement {
       }
       const navItem = pathToNav[path]
       if (navItem) {
+        setSettingsInitialTab(null)
         setActiveNav(navItem)
       }
     })
@@ -105,9 +108,15 @@ export function MainLayoutContents(): React.ReactElement {
     window.addEventListener('navigate-to-tool', handleNavigateToTool)
 
     const handleNavigateToPage = (e: Event) => {
-      const customEvent = e as CustomEvent<{ page: NavItem }>
+      const customEvent = e as CustomEvent<{ page: NavItem; tab?: string }>
       const page = customEvent.detail?.page
+      const tab = customEvent.detail?.tab
       if (page) {
+        if (page === 'settings') {
+          setSettingsInitialTab(tab ?? null)
+        } else {
+          setSettingsInitialTab(null)
+        }
         setActiveNav(page)
       }
     }
@@ -150,6 +159,7 @@ export function MainLayoutContents(): React.ReactElement {
       // 2. Cmd + ,: 标准 macOS 打开设置
       if (isCmdOrCtrl && e.key === ',') {
         e.preventDefault()
+        setSettingsInitialTab(null)
         setActiveNav('settings')
         return
       }
@@ -207,7 +217,7 @@ export function MainLayoutContents(): React.ReactElement {
         return <MediaAssetsPage />
 
       case 'settings':
-        return <SettingsPage />
+        return <SettingsPage initialTab={settingsInitialTab ?? undefined} />
       default:
         return <DashboardPage />
     }
@@ -228,7 +238,13 @@ export function MainLayoutContents(): React.ReactElement {
 
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-background">
-      <Sidebar activeNav={activeNav} onNavChange={setActiveNav} />
+      <Sidebar
+        activeNav={activeNav}
+        onNavChange={(nav) => {
+          setSettingsInitialTab(null)
+          setActiveNav(nav)
+        }}
+      />
       <div className="flex flex-1 flex-col overflow-hidden">
         {/* 顶部可拖动区域 */}
         <div

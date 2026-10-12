@@ -79,14 +79,44 @@ const STORAGE_COLORS: Record<string, string> = {
   'other': '#cbd5e1' // gray
 }
 
-export function SettingsPage(): React.ReactElement {
+type SettingsTab =
+  | 'appearance'
+  | 'security'
+  | 'hotkeys'
+  | 'network'
+  | 'storage'
+  | 'about'
+  | 'ai'
+  | 'ai-history'
+  | 'api'
+  | 'cdn'
+
+const SETTINGS_TABS: SettingsTab[] = [
+  'appearance',
+  'security',
+  'hotkeys',
+  'network',
+  'storage',
+  'about',
+  'ai',
+  'ai-history',
+  'api',
+  'cdn',
+]
+
+function resolveSettingsTab(tab?: string | null): SettingsTab {
+  if (tab && (SETTINGS_TABS as string[]).includes(tab)) return tab as SettingsTab
+  return 'appearance'
+}
+
+export function SettingsPage({ initialTab }: { initialTab?: string }): React.ReactElement {
   const { t } = useTranslation()
   const currentLanguage = getCurrentLanguage()
   const [dataPath, setDataPath] = useState<string>('')
   const [storageStats, setStorageStats] = useState<StorageStats | null>(null)
   const [loadingStorage, setLoadingStorage] = useState(false)
   const [settings, setSettings] = useState<any>(null)
-  const [activeTab, setActiveTab] = useState<'appearance' | 'security' | 'hotkeys' | 'network' | 'storage' | 'about' | 'ai' | 'ai-history' | 'api' | 'cdn'>('appearance')
+  const [activeTab, setActiveTab] = useState<SettingsTab>(() => resolveSettingsTab(initialTab))
 
   // API 服务配置状态
   const [apiConfig, setApiConfig] = useState<{

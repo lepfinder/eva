@@ -12,6 +12,7 @@ import {
   Trash2,
   Copy,
   Check,
+  CloudUpload,
 } from 'lucide-react'
 import { invoke } from '@tauri-apps/api/core'
 import { Button, buttonVariants } from '@/components/ui/button'
@@ -279,6 +280,20 @@ export function MediaAssetsPage() {
             <Badge variant="secondary" className="font-mono text-[11px]">
               {total} 项
             </Badge>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                window.dispatchEvent(
+                  new CustomEvent('navigate-to-page', {
+                    detail: { page: 'settings', tab: 'cdn' },
+                  }),
+                )
+              }}
+            >
+              <CloudUpload className="h-4 w-4 mr-1.5" />
+              图床配置
+            </Button>
             <Button
               variant="secondary"
               size="sm"
