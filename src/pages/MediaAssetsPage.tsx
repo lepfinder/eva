@@ -1035,10 +1035,10 @@ export function MediaAssetsPage() {
           </div>
         )}
 
-        <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border bg-card/30">
-          <div className="relative min-h-0 flex-1 overflow-auto p-3">
+        <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
+          <div className="relative min-h-0 flex-1 overflow-auto">
           {dragOver && (
-            <div className="pointer-events-none absolute inset-2 z-20 flex flex-col items-center justify-center rounded-lg border-2 border-dashed border-primary/60 bg-background/80 backdrop-blur-sm">
+            <div className="pointer-events-none absolute inset-0 z-20 flex flex-col items-center justify-center rounded-lg border-2 border-dashed border-primary/60 bg-background/80 backdrop-blur-sm">
               <Upload className="h-8 w-8 text-primary mb-2" />
               <p className="text-sm font-medium">松开以上传素材</p>
               <p className="text-xs text-muted-foreground mt-1">支持图片 / 视频 / 音频</p>
@@ -1194,7 +1194,7 @@ export function MediaAssetsPage() {
           )}
           </div>
           {showPager && (
-            <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-t bg-background/95 px-3 py-2 text-xs text-muted-foreground backdrop-blur supports-[backdrop-filter]:bg-background/80">
+            <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-t bg-background/95 px-0 py-2.5 text-xs text-muted-foreground backdrop-blur supports-[backdrop-filter]:bg-background/80">
               <div className="flex items-center gap-2">
                 <span>每页</span>
                 <div className="inline-flex items-center rounded-md border p-0.5">
