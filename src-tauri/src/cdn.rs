@@ -935,7 +935,10 @@ pub fn ingest_after_upload(
         style_tags: vec![],
     };
     match crate::media_assets::ingest_asset(user_data, req) {
-        Ok(_) => log::info!("[CDN] ingested asset after upload: {}", filename),
+        Ok(res) => {
+            log::info!("[CDN] ingested asset after upload: {}", filename);
+            crate::media_embed::enqueue_after_ingest(user_data, &res.asset.id);
+        }
         Err(e) => log::warn!("[CDN] ingest after upload failed: {}", e),
     }
 }

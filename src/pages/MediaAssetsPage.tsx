@@ -14,6 +14,9 @@ import {
   CloudUpload,
   Upload,
   Loader2,
+  Sparkles,
+  Brain,
+  Settings2,
 } from 'lucide-react'
 import { invoke } from '@tauri-apps/api/core'
 import { Button, buttonVariants } from '@/components/ui/button'
@@ -69,6 +72,29 @@ interface MediaAsset {
 interface AssetListResult {
   items: MediaAsset[]
   total: number
+}
+
+interface SemanticHit {
+  asset: MediaAsset
+  score: number
+}
+
+interface EmbedStats {
+  totalAssets: number
+  indexed: number
+  errors: number
+  queued: number
+  model: string
+  enabled: boolean
+}
+
+interface MediaEmbedConfig {
+  enabled: boolean
+  ollamaBaseUrl: string
+  model: string
+  autoTag: boolean
+  captionModel: string
+  captionEnabled: boolean
 }
 
 function KindIcon({ kind }: { kind: string }) {
@@ -194,26 +220,54 @@ export function MediaAssetsPage() {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const dragDepthRef = useRef(0)
   const pageRef = useRef<HTMLDivElement>(null)
+  const [semanticMode, setSemanticMode] = useState(false)
+  const [indexing, setIndexing] = useState(false)
+  const [embedStats, setEmbedStats] = useState<EmbedStats | null>(null)
+  const [embedCfgOpen, setEmbedCfgOpen] = useState(false)
+  const [embedCfg, setEmbedCfg] = useState<MediaEmbedConfig | null>(null)
+  const [embedCfgSaving, setEmbedCfgSaving] = useState(false)
 
   const showToast = useCallback((msg: string) => {
     setToastMsg(msg)
     window.setTimeout(() => setToastMsg(null), 4000)
   }, [])
 
+  const refreshEmbedStats = useCallback(async () => {
+    try {
+      const s = await invoke<EmbedStats>('media_embed_stats')
+      setEmbedStats(s)
+    } catch {
+      /* ignore if backend not ready */
+    }
+  }, [])
+
   const load = useCallback(async () => {
     setLoading(true)
     setError(null)
     try {
-      const res = await invoke<AssetListResult>('media_assets_list', {
-        limit: 120,
-        offset: 0,
-        q: q.trim() || null,
-        mediaKind: kind === 'all' ? null : kind,
-        favoriteOnly,
-        tag: null,
-      })
-      setItems(res.items)
-      setTotal(res.total)
+      if (semanticMode && q.trim()) {
+        const res = await invoke<{ items: SemanticHit[]; total: number }>('media_embed_semantic_search', {
+          query: q.trim(),
+          limit: 120,
+          mediaKind: kind === 'all' ? null : kind,
+        })
+        let list = res.items.map((h) => h.asset)
+        if (favoriteOnly) list = list.filter((a) => a.favorite)
+        setItems(list)
+        setTotal(favoriteOnly ? list.length : res.total)
+      } else {
+        const res = await invoke<AssetListResult>('media_assets_list', {
+          limit: 120,
+          offset: 0,
+          q: q.trim() || null,
+          mediaKind: kind === 'all' ? null : kind,
+          favoriteOnly,
+          tag: null,
+        })
+        setItems(res.items)
+        setTotal(res.total)
+      }
+      void refreshEmbedStats()
     } catch (e) {
       console.error('[MediaAssets] list failed', e)
       setError(String(e))
@@ -222,7 +276,7 @@ export function MediaAssetsPage() {
     } finally {
       setLoading(false)
     }
-  }, [q, kind, favoriteOnly])
+  }, [q, kind, favoriteOnly, semanticMode, refreshEmbedStats])
 
   useEffect(() => {
     void load()
@@ -454,6 +508,73 @@ export function MediaAssetsPage() {
     return () => window.removeEventListener('paste', onPaste)
   }, [uploadFiles, uploading])
 
+
+  const runIndexBatch = async () => {
+    if (indexing) return
+    setIndexing(true)
+    setError(null)
+    try {
+      const missing = await invoke<number>('media_embed_enqueue_missing')
+      const batch = await invoke<{ processed: number; succeeded: number; failed: number; remaining: number }>(
+        'media_embed_process_queue',
+        { limit: 12 },
+      )
+      showToast(
+        `索引完成：入队 ${missing} · 成功 ${batch.succeeded} · 失败 ${batch.failed} · 剩余 ${batch.remaining}`,
+      )
+      await refreshEmbedStats()
+      if (semanticMode) await load()
+    } catch (e) {
+      setError(String(e))
+    } finally {
+      setIndexing(false)
+    }
+  }
+
+  const openEmbedCfg = async () => {
+    try {
+      const cfg = await invoke<MediaEmbedConfig>('media_embed_get_config')
+      setEmbedCfg(cfg)
+      setEmbedCfgOpen(true)
+    } catch (e) {
+      setError(String(e))
+    }
+  }
+
+  const saveEmbedCfg = async () => {
+    if (!embedCfg) return
+    setEmbedCfgSaving(true)
+    try {
+      const saved = await invoke<MediaEmbedConfig>('media_embed_save_config', {
+        config: {
+          enabled: embedCfg.enabled,
+          ollamaBaseUrl: embedCfg.ollamaBaseUrl,
+          model: embedCfg.model,
+          autoTag: embedCfg.autoTag,
+          captionModel: embedCfg.captionModel,
+          captionEnabled: embedCfg.captionEnabled,
+        },
+      })
+      setEmbedCfg(saved)
+      setEmbedCfgOpen(false)
+      showToast('语义索引配置已保存')
+      await refreshEmbedStats()
+    } catch (e) {
+      setError(String(e))
+    } finally {
+      setEmbedCfgSaving(false)
+    }
+  }
+
+  const testEmbed = async () => {
+    try {
+      const r = await invoke<{ ok: boolean; dims: number; elapsedMs: number; model: string }>('media_embed_test')
+      showToast(`Ollama OK · ${r.model} · ${r.dims}d · ${r.elapsedMs}ms`)
+    } catch (e) {
+      setError(String(e))
+    }
+  }
+
   const pendingHasCloud = Boolean(pendingDelete?.cdnUrl?.trim())
 
   return (
@@ -520,7 +641,7 @@ export function MediaAssetsPage() {
             <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
             <input
               className="w-full h-9 rounded-md border bg-background pl-9 pr-3 text-sm outline-none focus:ring-2 focus:ring-ring"
-              placeholder="搜索文件名 / 提示词 / 备注 / 标签"
+              placeholder={semanticMode ? '语义搜索：描述画面 / 场景 / 风格…' : '搜索文件名 / 提示词 / 备注 / 标签'}
               value={q}
               onChange={(e) => setQ(e.target.value)}
               onKeyDown={(e) => {
@@ -528,6 +649,39 @@ export function MediaAssetsPage() {
               }}
             />
           </div>
+          <Button
+            size="sm"
+            variant={semanticMode ? 'secondary' : 'outline'}
+            className="h-9"
+            onClick={() => setSemanticMode((v) => !v)}
+            title="用 EmbeddingGemma 做画面语义检索"
+          >
+            <Sparkles className={clsx('h-4 w-4 mr-1.5', semanticMode && 'text-violet-500')} />
+            语义
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-9"
+            onClick={() => void runIndexBatch()}
+            disabled={indexing}
+            title="为未索引素材生成向量"
+          >
+            {indexing ? (
+              <Loader2 className="h-4 w-4 mr-1.5 animate-spin" />
+            ) : (
+              <Brain className="h-4 w-4 mr-1.5" />
+            )}
+            索引
+            {embedStats ? (
+              <span className="ml-1 font-mono text-[10px] opacity-70">
+                {embedStats.indexed}/{embedStats.totalAssets}
+              </span>
+            ) : null}
+          </Button>
+          <Button size="sm" variant="ghost" className="h-9 px-2" onClick={() => void openEmbedCfg()} title="语义索引 / Ollama 配置">
+            <Settings2 className="h-4 w-4" />
+          </Button>
           <div className="flex items-center gap-1 rounded-md border p-0.5">
             {(['all', 'image', 'video', 'audio', 'other'] as const).map((k) => (
               <Button
@@ -895,6 +1049,77 @@ export function MediaAssetsPage() {
             </AlertDialogFooter>
           </AlertDialogContent>
         </AlertDialog>
+
+        <Dialog open={embedCfgOpen} onOpenChange={setEmbedCfgOpen}>
+          <DialogContent className="max-w-md">
+            <div className="space-y-4">
+              <div>
+                <h2 className="text-base font-semibold">语义索引 · Ollama</h2>
+                <p className="text-xs text-muted-foreground mt-1">
+                  EmbeddingGemma 2 本地向量；自动打标先用近邻标签。画面 caption VLM 预留配置，暂不强制。
+                </p>
+              </div>
+              {embedCfg && (
+                <div className="space-y-3 text-sm">
+                  <label className="flex items-center justify-between gap-3">
+                    <span>启用</span>
+                    <input
+                      type="checkbox"
+                      checked={embedCfg.enabled}
+                      onChange={(e) => setEmbedCfg({ ...embedCfg, enabled: e.target.checked })}
+                    />
+                  </label>
+                  <label className="flex items-center justify-between gap-3">
+                    <span>近邻自动打标</span>
+                    <input
+                      type="checkbox"
+                      checked={embedCfg.autoTag}
+                      onChange={(e) => setEmbedCfg({ ...embedCfg, autoTag: e.target.checked })}
+                    />
+                  </label>
+                  <div className="space-y-1">
+                    <div className="text-xs text-muted-foreground">Ollama Base URL</div>
+                    <input
+                      className="w-full h-9 rounded-md border bg-background px-3 text-sm"
+                      value={embedCfg.ollamaBaseUrl}
+                      onChange={(e) => setEmbedCfg({ ...embedCfg, ollamaBaseUrl: e.target.value })}
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <div className="text-xs text-muted-foreground">嵌入模型</div>
+                    <input
+                      className="w-full h-9 rounded-md border bg-background px-3 text-sm"
+                      value={embedCfg.model}
+                      onChange={(e) => setEmbedCfg({ ...embedCfg, model: e.target.value })}
+                    />
+                  </div>
+                  <div className="space-y-1 opacity-60">
+                    <div className="text-xs text-muted-foreground">Caption VLM（预留，未启用）</div>
+                    <input
+                      className="w-full h-9 rounded-md border bg-background px-3 text-sm"
+                      value={embedCfg.captionModel}
+                      placeholder="例如 qwen3-vl:8b"
+                      onChange={(e) => setEmbedCfg({ ...embedCfg, captionModel: e.target.value })}
+                    />
+                  </div>
+                  <div className="flex items-center gap-2 pt-1">
+                    <Button size="sm" variant="outline" onClick={() => void testEmbed()}>
+                      测试连接
+                    </Button>
+                    <div className="flex-1" />
+                    <Button size="sm" variant="ghost" onClick={() => setEmbedCfgOpen(false)}>
+                      取消
+                    </Button>
+                    <Button size="sm" onClick={() => void saveEmbedCfg()} disabled={embedCfgSaving}>
+                      {embedCfgSaving ? '保存中…' : '保存'}
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </DialogContent>
+        </Dialog>
+
       </div>
     </TooltipProvider>
   )

@@ -7,6 +7,7 @@ pub mod hotkeys;
 pub mod http_server;
 pub mod local_ports;
 pub mod media_assets;
+pub mod media_embed;
 pub mod memory_analyzer;
 pub mod navigation;
 pub mod settings;
@@ -144,6 +145,10 @@ pub fn run() {
             // Initialise media assets library
             let media_assets_state = media_assets::init(app.handle());
             app.manage(media_assets_state);
+
+            // Initialise media embeddings (Ollama)
+            let media_embed_state = media_embed::init(app.handle());
+            app.manage(media_embed_state);
 
             // Initialise CDN / image bed
             let cdn_state = cdn::init(app.handle());
@@ -372,6 +377,15 @@ pub fn run() {
             media_assets::media_assets_delete,
             media_assets::media_assets_import_piclist,
             media_assets::media_assets_stats,
+            // Media embeddings / semantic search
+            media_embed::media_embed_get_config,
+            media_embed::media_embed_save_config,
+            media_embed::media_embed_test,
+            media_embed::media_embed_stats,
+            media_embed::media_embed_enqueue_missing,
+            media_embed::media_embed_process_queue,
+            media_embed::media_embed_index_one,
+            media_embed::media_embed_semantic_search,
             // CDN / Image bed
             cdn::cdn_get_config,
             cdn::cdn_save_config,

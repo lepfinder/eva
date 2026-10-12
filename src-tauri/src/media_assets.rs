@@ -355,7 +355,7 @@ pub fn init(app: &AppHandle) -> SharedMediaAssetsState {
     }))
 }
 
-fn ensure_tag(conn: &Connection, name: &str, kind: &str) -> Result<String, String> {
+pub fn ensure_tag(conn: &Connection, name: &str, kind: &str) -> Result<String, String> {
     let trimmed = name.trim();
     if trimmed.is_empty() {
         return Err("empty tag".into());
@@ -438,7 +438,7 @@ fn set_asset_tags(
     Ok(())
 }
 
-fn load_tags(conn: &Connection, asset_id: &str) -> Vec<MediaTag> {
+pub fn load_tags(conn: &Connection, asset_id: &str) -> Vec<MediaTag> {
     let mut stmt = match conn.prepare(
         "SELECT t.id, t.name, t.kind FROM tags t
          INNER JOIN asset_tags at ON at.tag_id = t.id
@@ -1211,7 +1211,9 @@ pub fn media_assets_ingest(
         let g = state.lock().map_err(|e| e.to_string())?;
         g.user_data_dir.clone()
     };
-    ingest_asset(&user_data, payload)
+    let result = ingest_asset(&user_data, payload)?;
+    crate::media_embed::enqueue_after_ingest(&user_data, &result.asset.id);
+    Ok(result)
 }
 
 #[tauri::command]
