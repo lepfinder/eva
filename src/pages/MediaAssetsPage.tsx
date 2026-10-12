@@ -247,6 +247,8 @@ function pasteFilename(mime: string): string {
   return `paste_${name}.${ext}`
 }
 
+const PAGE_SIZE = 120
+
 interface UploadResult {
   success: boolean
   url?: string | null
@@ -275,6 +277,14 @@ export function MediaAssetsPage() {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const dragDepthRef = useRef(0)
   const pageRef = useRef<HTMLDivElement>(null)
+  const scrollRootRef = useRef<HTMLDivElement>(null)
+  const loadMoreSentinelRef = useRef<HTMLDivElement>(null)
+  const itemsLenRef = useRef(0)
+  const loadingLockRef = useRef(false)
+  const hasMoreRef = useRef(true)
+  const loadGenRef = useRef(0)
+  const [loadingMore, setLoadingMore] = useState(false)
+  const [hasMore, setHasMore] = useState(true)
   const [semanticMode, setSemanticMode] = useState(false)
   const [indexing, setIndexing] = useState(false)
   const [embedStats, setEmbedStats] = useState<EmbedStats | null>(null)
@@ -307,46 +317,110 @@ export function MediaAssetsPage() {
     }
   }, [])
 
-  const load = useCallback(async () => {
-    setLoading(true)
-    setError(null)
+  const load = useCallback(async (opts?: { append?: boolean }) => {
+    const append = opts?.append ?? false
+    if (append) {
+      if (loadingLockRef.current || !hasMoreRef.current) return
+      if (semanticMode && q.trim()) return
+      setLoadingMore(true)
+    } else {
+      setLoading(true)
+      setError(null)
+      hasMoreRef.current = true
+      setHasMore(true)
+      loadGenRef.current += 1
+    }
+    const gen = loadGenRef.current
+    loadingLockRef.current = true
     try {
       if (semanticMode && q.trim()) {
         const res = await invoke<{ items: SemanticHit[]; total: number }>('media_embed_semantic_search', {
           query: q.trim(),
-          limit: 120,
+          limit: PAGE_SIZE,
           mediaKind: kind === 'all' ? null : kind,
         })
+        if (gen !== loadGenRef.current) return
         let list = res.items.map((h) => h.asset)
         if (favoriteOnly) list = list.filter((a) => a.favorite)
         setItems(list)
+        itemsLenRef.current = list.length
         setTotal(favoriteOnly ? list.length : res.total)
+        hasMoreRef.current = false
+        setHasMore(false)
       } else {
+        const offset = append ? itemsLenRef.current : 0
         const res = await invoke<AssetListResult>('media_assets_list', {
-          limit: 120,
-          offset: 0,
+          limit: PAGE_SIZE,
+          offset,
           q: q.trim() || null,
           mediaKind: kind === 'all' ? null : kind,
           favoriteOnly,
           tag: null,
         })
-        setItems(res.items)
+        if (gen !== loadGenRef.current) return
+        if (append) {
+          setItems((prev) => {
+            const seen = new Set(prev.map((a) => a.id))
+            const merged = [...prev]
+            for (const a of res.items) {
+              if (!seen.has(a.id)) merged.push(a)
+            }
+            itemsLenRef.current = merged.length
+            return merged
+          })
+        } else {
+          setItems(res.items)
+          itemsLenRef.current = res.items.length
+        }
         setTotal(res.total)
+        const loaded = offset + res.items.length
+        const more = res.items.length > 0 && loaded < res.total
+        hasMoreRef.current = more
+        setHasMore(more)
       }
       void refreshEmbedStats()
     } catch (e) {
       console.error('[MediaAssets] list failed', e)
+      if (gen !== loadGenRef.current) return
       setError(String(e))
-      setItems([])
-      setTotal(0)
+      if (!append) {
+        setItems([])
+        itemsLenRef.current = 0
+        setTotal(0)
+        hasMoreRef.current = false
+        setHasMore(false)
+      }
     } finally {
-      setLoading(false)
+      // Only the active generation may release the lock (stale overlap must not).
+      if (gen === loadGenRef.current) {
+        loadingLockRef.current = false
+        setLoading(false)
+        setLoadingMore(false)
+      }
     }
   }, [q, kind, favoriteOnly, semanticMode, refreshEmbedStats])
 
   useEffect(() => {
     void load()
   }, [load])
+
+  // Infinite scroll: load next page when sentinel enters the scroll viewport.
+  useEffect(() => {
+    const root = scrollRootRef.current
+    const sentinel = loadMoreSentinelRef.current
+    if (!root || !sentinel) return
+    if (semanticMode && q.trim()) return
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) {
+          void load({ append: true })
+        }
+      },
+      { root, rootMargin: '240px', threshold: 0 },
+    )
+    io.observe(sentinel)
+    return () => io.disconnect()
+  }, [load, semanticMode, q, hasMore, items.length])
 
   useEffect(() => {
     if (!selected) {
@@ -854,7 +928,7 @@ export function MediaAssetsPage() {
           </div>
         )}
 
-        <div className="relative flex-1 overflow-auto rounded-lg border bg-card/30 p-3">
+        <div ref={scrollRootRef} className="relative flex-1 overflow-auto rounded-lg border bg-card/30 p-3">
           {dragOver && (
             <div className="pointer-events-none absolute inset-2 z-20 flex flex-col items-center justify-center rounded-lg border-2 border-dashed border-primary/60 bg-background/80 backdrop-blur-sm">
               <Upload className="h-8 w-8 text-primary mb-2" />
@@ -1003,6 +1077,26 @@ export function MediaAssetsPage() {
                 )
               })}
             </div>
+            {!(semanticMode && q.trim()) && (hasMore || loadingMore) && (
+              <div
+                ref={loadMoreSentinelRef}
+                className="flex items-center justify-center gap-2 py-4 text-xs text-muted-foreground"
+              >
+                {loadingMore ? (
+                  <>
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    加载更多…
+                  </>
+                ) : (
+                  <span>下拉加载更多</span>
+                )}
+              </div>
+            )}
+            {!hasMore && items.length > 0 && !(semanticMode && q.trim()) && (
+              <p className="py-3 text-center text-[11px] text-muted-foreground">
+                已显示全部 {total} 项
+              </p>
+            )}
           )}
         </div>
 

@@ -672,7 +672,8 @@ pub fn enqueue_missing(user_data: &Path) -> Result<i64, String> {
         .prepare(
             "SELECT a.id FROM assets a
              LEFT JOIN asset_embeddings e ON e.asset_id = a.id AND e.status = 'ok'
-             WHERE e.asset_id IS NULL",
+             WHERE e.asset_id IS NULL
+             ORDER BY a.created_at DESC",
         )
         .map_err(|e| e.to_string())?;
     let ids: Vec<String> = stmt
@@ -681,8 +682,10 @@ pub fn enqueue_missing(user_data: &Path) -> Result<i64, String> {
         .filter_map(|r| r.ok())
         .collect();
     let n = ids.len() as i64;
-    let ts = now_ms();
-    for id in ids {
+    // Newest first: give newer assets higher enqueued_at so ASC dequeue also prefers them.
+    let base = now_ms();
+    for (i, id) in ids.into_iter().enumerate() {
+        let ts = base - i as i64;
         let _ = conn.execute(
             "INSERT INTO embed_queue (asset_id, enqueued_at, attempts) VALUES (?1, ?2, 0)
              ON CONFLICT(asset_id) DO NOTHING",
@@ -700,9 +703,13 @@ pub fn process_queue(user_data: &Path, limit: i64) -> Result<IndexBatchResult, S
     let conn = open_db(user_data)?;
     ensure_embed_schema(&conn)?;
     let lim = limit.max(1).min(50);
+    // Prefer newest assets first (join created_at), not oldest enqueued.
     let mut stmt = conn
         .prepare(
-            "SELECT asset_id FROM embed_queue ORDER BY enqueued_at ASC LIMIT ?1",
+            "SELECT q.asset_id FROM embed_queue q
+             INNER JOIN assets a ON a.id = q.asset_id
+             ORDER BY a.created_at DESC, q.enqueued_at DESC
+             LIMIT ?1",
         )
         .map_err(|e| e.to_string())?;
     let ids: Vec<String> = stmt
