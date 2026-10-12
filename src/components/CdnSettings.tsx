@@ -264,7 +264,11 @@ export function CdnSettings(): React.ReactElement {
         <CardHeader>
           <CardTitle className="text-base">阿里云 OSS</CardTitle>
           <CardDescription>
-            对象键格式：<code className="font-mono">img/YYYYMM/timestamp_rand.ext</code>
+            对象键格式：
+            <code className="font-mono">
+              {(cfg.aliyun.pathPrefix.trim().replace(/^\/+|\/+$/g, '') || 'media')}/YYYYMM/timestamp_rand.ext
+            </code>
+            （上传时自动拼年月；旧对象路径不变）
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -342,8 +346,14 @@ export function CdnSettings(): React.ReactElement {
                     aliyun: { ...cfg.aliyun, pathPrefix: e.target.value },
                   })
                 }
-                placeholder="img"
+                placeholder="media"
               />
+              <p className="text-[11px] text-muted-foreground">
+                实际对象键为{' '}
+                <code className="font-mono">
+                  {(cfg.aliyun.pathPrefix.trim().replace(/^\/+|\/+$/g, '') || 'media')}/YYYYMM/…
+                </code>
+              </p>
             </div>
             <div className="space-y-2">
               <div className="text-sm font-medium">自定义域名（可选）</div>

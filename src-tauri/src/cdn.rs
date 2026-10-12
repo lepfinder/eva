@@ -41,7 +41,7 @@ pub struct AliyunOssConfig {
     /// e.g. oss-cn-beijing
     #[serde(default = "default_area")]
     pub area: String,
-    /// Prefix without trailing slash, e.g. "img" → keys img/YYYYMM/...
+    /// Prefix without trailing slash, e.g. "media" → keys media/YYYYMM/...
     #[serde(default = "default_path_prefix")]
     pub path_prefix: String,
     #[serde(default)]
@@ -52,7 +52,7 @@ fn default_area() -> String {
     "oss-cn-beijing".into()
 }
 fn default_path_prefix() -> String {
-    "img".into()
+    "media".into()
 }
 
 impl Default for AliyunOssConfig {
@@ -287,14 +287,39 @@ pub fn config_path(user_data: &Path) -> PathBuf {
 
 pub fn load_config(user_data: &Path) -> CdnConfig {
     let path = config_path(user_data);
-    if path.exists() {
+    let mut cfg = if path.exists() {
         if let Ok(content) = fs::read_to_string(&path) {
             if let Ok(cfg) = serde_json::from_str::<CdnConfig>(&content) {
-                return cfg;
+                cfg
+            } else {
+                CdnConfig::default()
             }
+        } else {
+            CdnConfig::default()
         }
+    } else {
+        CdnConfig::default()
+    };
+
+    // One-shot: PicList-era default "img" → "media". Does not rewrite existing OSS objects.
+    let mut migrated = false;
+    if cfg.aliyun.path_prefix.trim() == "img" {
+        cfg.aliyun.path_prefix = default_path_prefix();
+        migrated = true;
     }
-    CdnConfig::default()
+    if cfg.r2.path_prefix.trim() == "img" {
+        cfg.r2.path_prefix = default_path_prefix();
+        migrated = true;
+    }
+    if migrated {
+        log::info!(
+            "[CDN] migrated pathPrefix img → {} (new uploads only; existing OSS keys unchanged)",
+            default_path_prefix()
+        );
+        let _ = save_config_file(user_data, &cfg);
+    }
+
+    cfg
 }
 
 fn save_config_file(user_data: &Path, cfg: &CdnConfig) -> Result<(), String> {
@@ -838,17 +863,9 @@ pub fn import_from_piclist(user_data: &Path) -> Result<CdnConfigView, String> {
         .and_then(|x| x.as_str())
         .unwrap_or("")
         .to_string();
-    // PicList path like "img/202606/" → prefix "img"
-    let path_raw = aliyun
-        .get("path")
-        .and_then(|x| x.as_str())
-        .unwrap_or("img/")
-        .trim_matches('/');
-    let path_prefix = path_raw
-        .split('/')
-        .next()
-        .unwrap_or("img")
-        .to_string();
+    // PicList often stores "img/YYYYMM/"; EVA new uploads use default "media/YYYYMM/".
+    // Existing OSS objects under the old prefix are left untouched.
+    let path_prefix = default_path_prefix();
 
     if access_key_id.is_empty() || bucket.is_empty() {
         return Err("PicList aliyun 配置缺少 accessKeyId 或 bucket".into());
@@ -1166,8 +1183,8 @@ mod tests {
 
     #[test]
     fn object_key_has_prefix_and_ext() {
-        let key = build_object_key("img", "shot.PNG");
-        assert!(key.starts_with("img/"));
+        let key = build_object_key("media", "shot.PNG");
+        assert!(key.starts_with("media/"));
         assert!(key.ends_with(".png"));
         let parts: Vec<_> = key.split('/').collect();
         assert_eq!(parts.len(), 3);
