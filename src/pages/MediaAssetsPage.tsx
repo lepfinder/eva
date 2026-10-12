@@ -98,6 +98,20 @@ function formatTime(ms: number): string {
   }
 }
 
+/** 卡片用紧凑时间：一天内相对，否则 YYYY-MM-DD HH:mm */
+function formatCardTime(ms: number): string {
+  if (!ms || ms <= 0) return ''
+  const d = new Date(ms)
+  if (Number.isNaN(d.getTime())) return ''
+  const diffSec = Math.floor((Date.now() - d.getTime()) / 1000)
+  if (diffSec < 30) return '刚刚'
+  if (diffSec < 60) return `${diffSec}秒前`
+  if (diffSec < 3600) return `${Math.floor(diffSec / 60)}分钟前`
+  if (diffSec < 86400) return `${Math.floor(diffSec / 3600)}小时前`
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+
 const IMAGE_EXT = new Set([
   'png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'heic', 'heif', 'avif',
 ])
@@ -641,6 +655,14 @@ export function MediaAssetsPage() {
                             </Badge>
                           ))}
                         </div>
+                        {asset.createdAt > 0 && (
+                          <p
+                            className="text-[10px] text-muted-foreground tabular-nums truncate"
+                            title={formatTime(asset.createdAt)}
+                          >
+                            {formatCardTime(asset.createdAt)}
+                          </p>
+                        )}
                       </div>
                     </button>
 
