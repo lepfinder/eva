@@ -1,6 +1,6 @@
 [package]
 name = "eva"
-version = "0.3.1"
+version = "0.3.2"
 description = "EVA Desktop Context & Intelligence System for AI Agents"
 authors = ["xiyangxie"]
 license = "MIT"
