@@ -17,6 +17,8 @@ import {
   Brain,
   MoreHorizontal,
   X,
+  ChevronLeft,
+  ChevronRight,
 } from 'lucide-react'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
@@ -168,35 +170,6 @@ function embedStatusLabel(status?: string | null, queued?: boolean): string {
   return '未索引'
 }
 
-function EmbedStatusBadge({ info }: { info?: AssetEmbedInfo | null }) {
-  const status = info?.status ?? 'pending'
-  const label = embedStatusLabel(status, info?.queued)
-  const cls =
-    status === 'ok'
-      ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400'
-      : status === 'error'
-        ? 'border-destructive/40 bg-destructive/10 text-destructive'
-        : 'border-border/80 bg-background/90 text-muted-foreground'
-  return (
-    <span
-      className={clsx(
-        'absolute left-2 top-2 z-[5] rounded-full border px-1.5 py-0.5 text-[10px] font-medium leading-none shadow-sm backdrop-blur-sm',
-        cls,
-      )}
-      title={
-        status === 'error' && info?.errorMsg
-          ? info.errorMsg
-          : status === 'ok' && info?.indexedAt
-            ? `索引于 ${formatTime(info.indexedAt)}`
-            : label
-      }
-    >
-      {label}
-    </span>
-  )
-}
-
-
 const IMAGE_EXT = new Set([
   'png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'heic', 'heif', 'avif',
 ])
@@ -251,7 +224,7 @@ function pasteFilename(mime: string): string {
   return `paste_${name}.${ext}`
 }
 
-const PAGE_SIZE = 120
+const PAGE_SIZE_OPTIONS = [50, 100] as const
 
 interface UploadResult {
   success: boolean
@@ -281,14 +254,9 @@ export function MediaAssetsPage() {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const dragDepthRef = useRef(0)
   const pageRef = useRef<HTMLDivElement>(null)
-  const scrollRootRef = useRef<HTMLDivElement>(null)
-  const loadMoreSentinelRef = useRef<HTMLDivElement>(null)
-  const itemsLenRef = useRef(0)
-  const loadingLockRef = useRef(false)
-  const hasMoreRef = useRef(true)
   const loadGenRef = useRef(0)
-  const [loadingMore, setLoadingMore] = useState(false)
-  const [hasMore, setHasMore] = useState(true)
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState<(typeof PAGE_SIZE_OPTIONS)[number]>(50)
   const [semanticMode, setSemanticMode] = useState(false)
   const [indexing, setIndexing] = useState(false)
   const [embedStats, setEmbedStats] = useState<EmbedStats | null>(null)
@@ -321,40 +289,27 @@ export function MediaAssetsPage() {
     }
   }, [])
 
-  const load = useCallback(async (opts?: { append?: boolean }) => {
-    const append = opts?.append ?? false
-    if (append) {
-      if (loadingLockRef.current || !hasMoreRef.current) return
-      if (semanticMode && q.trim()) return
-      setLoadingMore(true)
-    } else {
-      setLoading(true)
-      setError(null)
-      hasMoreRef.current = true
-      setHasMore(true)
-      loadGenRef.current += 1
-    }
+  const load = useCallback(async () => {
+    setLoading(true)
+    setError(null)
+    loadGenRef.current += 1
     const gen = loadGenRef.current
-    loadingLockRef.current = true
     try {
       if (semanticMode && q.trim()) {
         const res = await invoke<{ items: SemanticHit[]; total: number }>('media_embed_semantic_search', {
           query: q.trim(),
-          limit: PAGE_SIZE,
+          limit: pageSize,
           mediaKind: kind === 'all' ? null : kind,
         })
         if (gen !== loadGenRef.current) return
         let list = res.items.map((h) => h.asset)
         if (favoriteOnly) list = list.filter((a) => a.favorite)
         setItems(list)
-        itemsLenRef.current = list.length
         setTotal(favoriteOnly ? list.length : res.total)
-        hasMoreRef.current = false
-        setHasMore(false)
       } else {
-        const offset = append ? itemsLenRef.current : 0
+        const offset = (page - 1) * pageSize
         const res = await invoke<AssetListResult>('media_assets_list', {
-          limit: PAGE_SIZE,
+          limit: pageSize,
           offset,
           q: q.trim() || null,
           mediaKind: kind === 'all' ? null : kind,
@@ -362,69 +317,35 @@ export function MediaAssetsPage() {
           tag: null,
         })
         if (gen !== loadGenRef.current) return
-        if (append) {
-          setItems((prev) => {
-            const seen = new Set(prev.map((a) => a.id))
-            const merged = [...prev]
-            for (const a of res.items) {
-              if (!seen.has(a.id)) merged.push(a)
-            }
-            itemsLenRef.current = merged.length
-            return merged
-          })
-        } else {
-          setItems(res.items)
-          itemsLenRef.current = res.items.length
+        // If filters/deletes left us past the last page, clamp back.
+        if (res.total > 0 && offset >= res.total) {
+          const last = Math.max(1, Math.ceil(res.total / pageSize))
+          setPage(last)
+          return
         }
+        setItems(res.items)
         setTotal(res.total)
-        const loaded = offset + res.items.length
-        const more = res.items.length > 0 && loaded < res.total
-        hasMoreRef.current = more
-        setHasMore(more)
       }
       void refreshEmbedStats()
     } catch (e) {
       console.error('[MediaAssets] list failed', e)
       if (gen !== loadGenRef.current) return
       setError(String(e))
-      if (!append) {
-        setItems([])
-        itemsLenRef.current = 0
-        setTotal(0)
-        hasMoreRef.current = false
-        setHasMore(false)
-      }
+      setItems([])
+      setTotal(0)
     } finally {
-      // Only the active generation may release the lock (stale overlap must not).
       if (gen === loadGenRef.current) {
-        loadingLockRef.current = false
         setLoading(false)
-        setLoadingMore(false)
       }
     }
-  }, [q, kind, favoriteOnly, semanticMode, refreshEmbedStats])
+  }, [q, kind, favoriteOnly, semanticMode, page, pageSize, refreshEmbedStats])
 
   useEffect(() => {
     void load()
   }, [load])
 
-  // Infinite scroll: load next page when sentinel enters the scroll viewport.
-  useEffect(() => {
-    const root = scrollRootRef.current
-    const sentinel = loadMoreSentinelRef.current
-    if (!root || !sentinel) return
-    if (semanticMode && q.trim()) return
-    const io = new IntersectionObserver(
-      (entries) => {
-        if (entries.some((e) => e.isIntersecting)) {
-          void load({ append: true })
-        }
-      },
-      { root, rootMargin: '240px', threshold: 0 },
-    )
-    io.observe(sentinel)
-    return () => io.disconnect()
-  }, [load, semanticMode, q, hasMore, items.length])
+  const totalPages = Math.max(1, Math.ceil(Math.max(total, 0) / pageSize))
+  const showPager = !(semanticMode && q.trim()) && total > 0
 
   useEffect(() => {
     if (!selected) {
@@ -998,7 +919,10 @@ export function MediaAssetsPage() {
               className="w-full h-9 rounded-md border bg-background pl-9 pr-3 text-sm outline-none focus:ring-2 focus:ring-ring"
               placeholder={semanticMode ? '语义搜索：描述画面 / 场景 / 风格…' : '搜索文件名 / 提示词 / 备注 / 标签'}
               value={q}
-              onChange={(e) => setQ(e.target.value)}
+              onChange={(e) => {
+                setQ(e.target.value)
+                setPage(1)
+              }}
               onKeyDown={(e) => {
                 if (e.key === 'Enter') void load()
               }}
@@ -1008,7 +932,10 @@ export function MediaAssetsPage() {
             size="sm"
             variant={semanticMode ? 'secondary' : 'outline'}
             className="h-9"
-            onClick={() => setSemanticMode((v) => !v)}
+            onClick={() => {
+              setSemanticMode((v) => !v)
+              setPage(1)
+            }}
             title="用 EmbeddingGemma 做画面语义检索"
           >
             <Sparkles className={clsx('h-4 w-4 mr-1.5', semanticMode && 'text-violet-500')} />
@@ -1021,7 +948,10 @@ export function MediaAssetsPage() {
                 size="sm"
                 variant={kind === k ? 'secondary' : 'ghost'}
                 className="h-8 px-2.5 text-xs"
-                onClick={() => setKind(k)}
+                onClick={() => {
+                  setKind(k)
+                  setPage(1)
+                }}
               >
                 {k === 'all' ? '全部' : k === 'image' ? '图片' : k === 'video' ? '视频' : k === 'audio' ? '音频' : '其他'}
               </Button>
@@ -1031,7 +961,10 @@ export function MediaAssetsPage() {
             size="sm"
             variant={favoriteOnly ? 'secondary' : 'outline'}
             className="h-9"
-            onClick={() => setFavoriteOnly((v) => !v)}
+            onClick={() => {
+              setFavoriteOnly((v) => !v)
+              setPage(1)
+            }}
             title="仅看收藏"
           >
             <Star className={clsx('h-4 w-4', favoriteOnly && 'fill-amber-400 text-amber-400')} />
@@ -1044,6 +977,7 @@ export function MediaAssetsPage() {
               onClick={() => {
                 setKind('all')
                 setFavoriteOnly(false)
+                setPage(1)
               }}
             >
               <X className="h-4 w-4 mr-1" />
@@ -1072,7 +1006,7 @@ export function MediaAssetsPage() {
           </div>
         )}
 
-        <div ref={scrollRootRef} className="relative flex-1 overflow-auto rounded-lg border bg-card/30 p-3">
+        <div className="relative flex-1 overflow-auto rounded-lg border bg-card/30 p-3">
           {dragOver && (
             <div className="pointer-events-none absolute inset-2 z-20 flex flex-col items-center justify-center rounded-lg border-2 border-dashed border-primary/60 bg-background/80 backdrop-blur-sm">
               <Upload className="h-8 w-8 text-primary mb-2" />
@@ -1115,7 +1049,6 @@ export function MediaAssetsPage() {
                         ) : (
                           <KindIcon kind={asset.mediaKind} />
                         )}
-                        <EmbedStatusBadge info={embedStatusMap[asset.id]} />
                       </div>
                       <div className="p-2 space-y-1">
                         <div className="flex items-start gap-1">
@@ -1222,24 +1155,61 @@ export function MediaAssetsPage() {
                 )
               })}
             </div>
-            {!(semanticMode && q.trim()) && (hasMore || loadingMore) && (
-              <div
-                ref={loadMoreSentinelRef}
-                className="flex items-center justify-center gap-2 py-4 text-xs text-muted-foreground"
-              >
-                {loadingMore ? (
-                  <>
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    加载更多…
-                  </>
-                ) : (
-                  <span>下拉加载更多</span>
-                )}
+            {showPager && (
+              <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t pt-3 text-xs text-muted-foreground">
+                <div className="flex items-center gap-2">
+                  <span>每页</span>
+                  <div className="inline-flex items-center rounded-md border p-0.5">
+                    {PAGE_SIZE_OPTIONS.map((n) => (
+                      <Button
+                        key={n}
+                        type="button"
+                        size="sm"
+                        variant={pageSize === n ? 'secondary' : 'ghost'}
+                        className="h-7 px-2.5 text-xs"
+                        disabled={loading}
+                        onClick={() => {
+                          setPageSize(n)
+                          setPage(1)
+                        }}
+                      >
+                        {n}
+                      </Button>
+                    ))}
+                  </div>
+                  <span className="tabular-nums">
+                    第 {Math.min(page, totalPages)} / {totalPages} 页 · 共 {total} 项
+                  </span>
+                </div>
+                <div className="flex items-center gap-1">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    className="h-8 px-2"
+                    disabled={loading || page <= 1}
+                    onClick={() => setPage((p) => Math.max(1, p - 1))}
+                    aria-label="上一页"
+                  >
+                    <ChevronLeft className="h-4 w-4" />
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    className="h-8 px-2"
+                    disabled={loading || page >= totalPages}
+                    onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                    aria-label="下一页"
+                  >
+                    <ChevronRight className="h-4 w-4" />
+                  </Button>
+                </div>
               </div>
             )}
-            {!hasMore && items.length > 0 && !(semanticMode && q.trim()) && (
-              <p className="py-3 text-center text-[11px] text-muted-foreground">
-                已显示全部 {total} 项
+            {semanticMode && q.trim() && items.length > 0 && (
+              <p className="mt-3 py-1 text-center text-[11px] text-muted-foreground">
+                语义结果最多显示 {pageSize} 条
               </p>
             )}
             </>
