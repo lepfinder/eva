@@ -226,6 +226,33 @@ function pasteFilename(mime: string): string {
 
 const PAGE_SIZE_OPTIONS = [50, 100] as const
 
+/** Build numbered page items with ellipsis gaps, e.g. 1 2 3 4 5 … 18 */
+function buildPageItems(current: number, total: number): Array<number | 'ellipsis'> {
+  if (total <= 0) return []
+  if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1)
+
+  const pages = new Set<number>([1, total])
+  for (let i = current - 2; i <= current + 2; i++) {
+    if (i >= 1 && i <= total) pages.add(i)
+  }
+  if (current <= 4) {
+    for (let i = 1; i <= 5; i++) pages.add(i)
+  }
+  if (current >= total - 3) {
+    for (let i = total - 4; i <= total; i++) {
+      if (i >= 1) pages.add(i)
+    }
+  }
+
+  const sorted = [...pages].sort((a, b) => a - b)
+  const out: Array<number | 'ellipsis'> = []
+  for (let i = 0; i < sorted.length; i++) {
+    if (i > 0 && sorted[i]! - sorted[i - 1]! > 1) out.push('ellipsis')
+    out.push(sorted[i]!)
+  }
+  return out
+}
+
 interface UploadResult {
   success: boolean
   url?: string | null
@@ -346,6 +373,8 @@ export function MediaAssetsPage() {
 
   const totalPages = Math.max(1, Math.ceil(Math.max(total, 0) / pageSize))
   const showPager = !(semanticMode && q.trim()) && total > 0
+  const currentPage = Math.min(page, totalPages)
+  const pageItems = buildPageItems(currentPage, totalPages)
 
   useEffect(() => {
     if (!selected) {
@@ -838,7 +867,7 @@ export function MediaAssetsPage() {
       <div
         ref={pageRef}
         tabIndex={-1}
-        className="relative flex h-full flex-col gap-4 outline-none"
+        className="relative flex h-full min-h-0 flex-col gap-4 outline-none"
         onDragEnter={onDragEnter}
         onDragLeave={onDragLeave}
         onDragOver={onDragOver}
@@ -1006,7 +1035,8 @@ export function MediaAssetsPage() {
           </div>
         )}
 
-        <div className="relative flex-1 overflow-auto rounded-lg border bg-card/30 p-3">
+        <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border bg-card/30">
+          <div className="relative min-h-0 flex-1 overflow-auto p-3">
           {dragOver && (
             <div className="pointer-events-none absolute inset-2 z-20 flex flex-col items-center justify-center rounded-lg border-2 border-dashed border-primary/60 bg-background/80 backdrop-blur-sm">
               <Upload className="h-8 w-8 text-primary mb-2" />
@@ -1155,64 +1185,91 @@ export function MediaAssetsPage() {
                 )
               })}
             </div>
-            {showPager && (
-              <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t pt-3 text-xs text-muted-foreground">
-                <div className="flex items-center gap-2">
-                  <span>每页</span>
-                  <div className="inline-flex items-center rounded-md border p-0.5">
-                    {PAGE_SIZE_OPTIONS.map((n) => (
-                      <Button
-                        key={n}
-                        type="button"
-                        size="sm"
-                        variant={pageSize === n ? 'secondary' : 'ghost'}
-                        className="h-7 px-2.5 text-xs"
-                        disabled={loading}
-                        onClick={() => {
-                          setPageSize(n)
-                          setPage(1)
-                        }}
-                      >
-                        {n}
-                      </Button>
-                    ))}
-                  </div>
-                  <span className="tabular-nums">
-                    第 {Math.min(page, totalPages)} / {totalPages} 页 · 共 {total} 项
-                  </span>
-                </div>
-                <div className="flex items-center gap-1">
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="outline"
-                    className="h-8 px-2"
-                    disabled={loading || page <= 1}
-                    onClick={() => setPage((p) => Math.max(1, p - 1))}
-                    aria-label="上一页"
-                  >
-                    <ChevronLeft className="h-4 w-4" />
-                  </Button>
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="outline"
-                    className="h-8 px-2"
-                    disabled={loading || page >= totalPages}
-                    onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-                    aria-label="下一页"
-                  >
-                    <ChevronRight className="h-4 w-4" />
-                  </Button>
-                </div>
-              </div>
-            )}
             {semanticMode && q.trim() && items.length > 0 && (
               <p className="mt-3 py-1 text-center text-[11px] text-muted-foreground">
                 语义结果最多显示 {pageSize} 条
               </p>
             )}
             </>
+          )}
+          </div>
+          {showPager && (
+            <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-t bg-background/95 px-3 py-2 text-xs text-muted-foreground backdrop-blur supports-[backdrop-filter]:bg-background/80">
+              <div className="flex items-center gap-2">
+                <span>每页</span>
+                <div className="inline-flex items-center rounded-md border p-0.5">
+                  {PAGE_SIZE_OPTIONS.map((n) => (
+                    <Button
+                      key={n}
+                      type="button"
+                      size="sm"
+                      variant={pageSize === n ? 'secondary' : 'ghost'}
+                      className="h-7 px-2.5 text-xs"
+                      disabled={loading}
+                      onClick={() => {
+                        setPageSize(n)
+                        setPage(1)
+                      }}
+                    >
+                      {n}
+                    </Button>
+                  ))}
+                </div>
+                <span className="tabular-nums">共 {total} 项</span>
+              </div>
+              <div className="flex items-center gap-1">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  className="h-8 px-2"
+                  disabled={loading || currentPage <= 1}
+                  onClick={() => setPage((p) => Math.max(1, p - 1))}
+                  aria-label="上一页"
+                >
+                  <ChevronLeft className="h-4 w-4" />
+                </Button>
+                {pageItems.map((item, idx) =>
+                  item === 'ellipsis' ? (
+                    <span
+                      key={`e-${idx}`}
+                      className="inline-flex h-8 min-w-8 items-center justify-center px-1 text-muted-foreground"
+                      aria-hidden
+                    >
+                      …
+                    </span>
+                  ) : (
+                    <Button
+                      key={item}
+                      type="button"
+                      size="sm"
+                      variant={item === currentPage ? 'secondary' : 'outline'}
+                      className={clsx(
+                        'h-8 min-w-8 px-2 tabular-nums',
+                        item === currentPage && 'pointer-events-none font-semibold',
+                      )}
+                      disabled={loading}
+                      aria-label={`第 ${item} 页`}
+                      aria-current={item === currentPage ? 'page' : undefined}
+                      onClick={() => setPage(item)}
+                    >
+                      {item}
+                    </Button>
+                  ),
+                )}
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  className="h-8 px-2"
+                  disabled={loading || currentPage >= totalPages}
+                  onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                  aria-label="下一页"
+                >
+                  <ChevronRight className="h-4 w-4" />
+                </Button>
+              </div>
+            </div>
           )}
         </div>
 
