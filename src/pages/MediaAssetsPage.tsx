@@ -16,13 +16,25 @@ import {
   Loader2,
   Sparkles,
   Brain,
-  Settings2,
+  MoreHorizontal,
+  X,
 } from 'lucide-react'
 import { invoke } from '@tauri-apps/api/core'
 import { Button, buttonVariants } from '@/components/ui/button'
 import { Progress } from '@/components/ui/progress'
 import { Badge } from '@/components/ui/badge'
 import { Dialog, DialogContent } from '@/components/ui/dialog'
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import {
   AlertDialog,
   AlertDialogCancel,
@@ -643,6 +655,7 @@ export function MediaAssetsPage() {
       const cfg = await invoke<MediaEmbedConfig>('media_embed_get_config')
       setEmbedCfg(cfg)
       setEmbedCfgOpen(true)
+      void refreshEmbedStats()
     } catch (e) {
       setError(String(e))
     }
@@ -664,7 +677,7 @@ export function MediaAssetsPage() {
       })
       setEmbedCfg(saved)
       setEmbedCfgOpen(false)
-      showToast('语义索引配置已保存')
+      showToast('智能配置已保存')
       await refreshEmbedStats()
     } catch (e) {
       setError(String(e))
@@ -681,6 +694,8 @@ export function MediaAssetsPage() {
       setError(String(e))
     }
   }
+
+  const filtersActive = kind !== 'all' || favoriteOnly
 
   const pendingHasCloud = Boolean(pendingDelete?.cdnUrl?.trim())
 
@@ -707,7 +722,7 @@ export function MediaAssetsPage() {
           <div>
             <h1 className="text-xl font-semibold tracking-tight">素材库</h1>
             <p className="text-sm text-muted-foreground mt-1">
-              拖拽 / ⌘V 粘贴 / 上传 · 与视觉回溯分离
+              拖拽 / ⌘V 粘贴上传
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -722,24 +737,44 @@ export function MediaAssetsPage() {
               )}
               上传
             </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => {
-                window.dispatchEvent(
-                  new CustomEvent('navigate-to-page', {
-                    detail: { page: 'settings', tab: 'cdn' },
-                  }),
-                )
-              }}
-            >
-              <CloudUpload className="h-4 w-4 mr-1.5" />
-              图床配置
-            </Button>
-            <Button variant="outline" size="sm" onClick={() => void load()} disabled={loading || uploading}>
-              <RefreshCw className={clsx('h-4 w-4 mr-1.5', loading && 'animate-spin')} />
-              刷新
-            </Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" size="sm" className="h-9 w-9 px-0" aria-label="更多">
+                  <MoreHorizontal className="h-4 w-4" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-48">
+                <DropdownMenuItem
+                  onClick={() => {
+                    window.dispatchEvent(
+                      new CustomEvent('navigate-to-page', {
+                        detail: { page: 'settings', tab: 'cdn' },
+                      }),
+                    )
+                  }}
+                >
+                  <CloudUpload className="h-4 w-4 mr-2" />
+                  图床配置
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  disabled={loading || uploading}
+                  onClick={() => void load()}
+                >
+                  <RefreshCw className={clsx('h-4 w-4 mr-2', loading && 'animate-spin')} />
+                  刷新
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onClick={() => void openEmbedCfg()}>
+                  <Brain className="h-4 w-4 mr-2" />
+                  智能
+                  {embedStats ? (
+                    <span className="ml-auto font-mono text-[10px] text-muted-foreground">
+                      {embedStats.indexed}/{embedStats.totalAssets}
+                    </span>
+                  ) : null}
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           </div>
         </div>
 
@@ -766,55 +801,58 @@ export function MediaAssetsPage() {
             <Sparkles className={clsx('h-4 w-4 mr-1.5', semanticMode && 'text-violet-500')} />
             语义
           </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            className="h-9"
-            onClick={() => void runIndexBatch()}
-            disabled={indexing}
-            title="为未索引素材生成向量"
-          >
-            {indexing ? (
-              <Loader2 className="h-4 w-4 mr-1.5 animate-spin" />
-            ) : (
-              <Brain className="h-4 w-4 mr-1.5" />
-            )}
-            索引
-            {embedStats ? (
-              <span className="ml-1 font-mono text-[10px] opacity-70">
-                {embedStats.indexed}/{embedStats.totalAssets}
-              </span>
-            ) : null}
-          </Button>
-          <Button size="sm" variant="ghost" className="h-9 px-2" onClick={() => void openEmbedCfg()} title="语义索引 / Ollama 配置">
-            <Settings2 className="h-4 w-4" />
-          </Button>
-          <div className="flex items-center gap-1 rounded-md border p-0.5">
-            {(['all', 'image', 'video', 'audio', 'other'] as const).map((k) => (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
               <Button
-                key={k}
                 size="sm"
-                variant={kind === k ? 'secondary' : 'ghost'}
-                className="h-8 px-2.5 text-xs"
-                onClick={() => setKind(k)}
+                variant={filtersActive ? 'secondary' : 'outline'}
+                className="h-9"
               >
-                {k === 'all' ? '全部' : k === 'image' ? '图片' : k === 'video' ? '视频' : k === 'audio' ? '音频' : '其他'}
+                <Filter className="h-4 w-4 mr-1.5" />
+                筛选
+                {filtersActive ? (
+                  <span className="ml-1.5 rounded-full bg-primary/15 px-1.5 text-[10px] font-mono">
+                    {(kind !== 'all' ? 1 : 0) + (favoriteOnly ? 1 : 0)}
+                  </span>
+                ) : null}
               </Button>
-            ))}
-          </div>
-          <Button
-            size="sm"
-            variant={favoriteOnly ? 'secondary' : 'outline'}
-            className="h-9"
-            onClick={() => setFavoriteOnly((v) => !v)}
-          >
-            <Star className={clsx('h-4 w-4 mr-1.5', favoriteOnly && 'fill-amber-400 text-amber-400')} />
-            收藏
-          </Button>
-          <Button size="sm" variant="ghost" className="h-9" onClick={() => { setQ(''); setKind('all'); setFavoriteOnly(false) }}>
-            <Filter className="h-4 w-4 mr-1" />
-            重置
-          </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="w-52">
+              <DropdownMenuLabel>类型</DropdownMenuLabel>
+              <DropdownMenuRadioGroup
+                value={kind}
+                onValueChange={(v) => setKind(v as typeof kind)}
+              >
+                <DropdownMenuRadioItem value="all">全部</DropdownMenuRadioItem>
+                <DropdownMenuRadioItem value="image">图片</DropdownMenuRadioItem>
+                <DropdownMenuRadioItem value="video">视频</DropdownMenuRadioItem>
+                <DropdownMenuRadioItem value="audio">音频</DropdownMenuRadioItem>
+                <DropdownMenuRadioItem value="other">其他</DropdownMenuRadioItem>
+              </DropdownMenuRadioGroup>
+              <DropdownMenuSeparator />
+              <DropdownMenuCheckboxItem
+                checked={favoriteOnly}
+                onCheckedChange={(v) => setFavoriteOnly(Boolean(v))}
+              >
+                <Star className={clsx('h-3.5 w-3.5 mr-1.5', favoriteOnly && 'fill-amber-400 text-amber-400')} />
+                仅收藏
+              </DropdownMenuCheckboxItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+          {filtersActive && (
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-9"
+              onClick={() => {
+                setKind('all')
+                setFavoriteOnly(false)
+              }}
+            >
+              <X className="h-4 w-4 mr-1" />
+              重置
+            </Button>
+          )}
         </div>
 
         {error && (
@@ -1229,15 +1267,52 @@ export function MediaAssetsPage() {
           <DialogContent className="max-w-md">
             <div className="space-y-4">
               <div>
-                <h2 className="text-base font-semibold">语义索引 · Ollama</h2>
+                <h2 className="text-base font-semibold">智能</h2>
                 <p className="text-xs text-muted-foreground mt-1">
-                  EmbeddingGemma 2 本地向量；自动打标用近邻标签。详情页可选用 VLM 生成中文描述。
+                  本地语义索引与自动打标。普通人搜图用顶部「语义」即可；索引与模型配置在此。
                 </p>
               </div>
+
+              <div className="rounded-lg border bg-muted/30 p-3 space-y-2.5">
+                <div className="flex items-center justify-between gap-2 text-sm">
+                  <span className="font-medium">索引进度</span>
+                  <span className="font-mono text-xs text-muted-foreground">
+                    {embedStats
+                      ? `${embedStats.indexed}/${embedStats.totalAssets}`
+                      : '—'}
+                  </span>
+                </div>
+                {embedStats && embedStats.totalAssets > 0 ? (
+                  <Progress
+                    value={Math.min(100, Math.round((embedStats.indexed / embedStats.totalAssets) * 100))}
+                    className="h-1.5"
+                  />
+                ) : null}
+                <div className="flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
+                  {embedStats?.queued ? <span>排队 {embedStats.queued}</span> : null}
+                  {embedStats?.errors ? <span className="text-destructive">失败 {embedStats.errors}</span> : null}
+                  {embedStats?.model ? <span className="font-mono truncate max-w-[180px]">{embedStats.model}</span> : null}
+                </div>
+                <Button
+                  size="sm"
+                  className="w-full"
+                  onClick={() => void runIndexBatch()}
+                  disabled={indexing}
+                >
+                  {indexing ? (
+                    <Loader2 className="h-4 w-4 mr-1.5 animate-spin" />
+                  ) : (
+                    <Brain className="h-4 w-4 mr-1.5" />
+                  )}
+                  {indexing ? '索引中…' : '索引一批（约 12 条）'}
+                </Button>
+              </div>
+
               {embedCfg && (
                 <div className="space-y-3 text-sm">
+                  <div className="text-xs font-medium text-muted-foreground">Ollama 配置</div>
                   <label className="flex items-center justify-between gap-3">
-                    <span>启用</span>
+                    <span>启用语义索引</span>
                     <input
                       type="checkbox"
                       checked={embedCfg.enabled}
