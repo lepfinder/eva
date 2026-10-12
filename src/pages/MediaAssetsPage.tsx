@@ -90,9 +90,11 @@ export function MediaAssetsPage() {
   const [selected, setSelected] = useState<MediaAsset | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [deleting, setDeleting] = useState(false)
+  const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false)
   const [copied, setCopied] = useState(false)
   const [importing, setImporting] = useState(false)
   const [importMsg, setImportMsg] = useState<string | null>(null)
+  const [toastMsg, setToastMsg] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -146,23 +148,55 @@ export function MediaAssetsPage() {
     }
   }
 
-  const deleteAsset = async (asset: MediaAsset) => {
-    const hasCloud = !!asset.cdnUrl?.trim()
-    const msg = hasCloud
-      ? `确定删除「${asset.filename}」？\n将同时删除云端对象与本地记录，此操作不可撤销。`
-      : `确定删除「${asset.filename}」？\n将删除本地记录，此操作不可撤销。`
-    if (!window.confirm(msg)) return
+  const formatDeleteError = (e: unknown): string => {
+    const raw = typeof e === 'string' ? e : e instanceof Error ? e.message : String(e)
+    if (
+      raw.includes('oss:DeleteObject') ||
+      raw.includes('AccessDenied') ||
+      raw.includes('拒绝删除')
+    ) {
+      return `云端删除被拒绝：当前 AccessKey 缺少 oss:DeleteObject 权限。本地记录未删除。\n${raw}`
+    }
+    return raw
+  }
+
+  const requestDelete = () => {
+    if (!selected || deleting) return
+    setError(null)
+    setConfirmDeleteOpen(true)
+  }
+
+  const confirmDelete = async () => {
+    const asset = selected
+    if (!asset) {
+      setConfirmDeleteOpen(false)
+      return
+    }
 
     setDeleting(true)
     setError(null)
+    setToastMsg(null)
     try {
-      await invoke('media_assets_delete', { id: asset.id })
+      const res = await invoke<{ id: string; cloudDeleted: boolean; localFileDeleted: boolean }>(
+        'media_assets_delete',
+        { id: asset.id },
+      )
       setItems((prev) => prev.filter((x) => x.id !== asset.id))
       setTotal((t) => Math.max(0, t - 1))
       setSelected(null)
+      setConfirmDeleteOpen(false)
+      setToastMsg(
+        res.cloudDeleted
+          ? `已删除「${asset.filename}」（云端 + 本地）`
+          : `已删除「${asset.filename}」（仅本地）`,
+      )
+      window.setTimeout(() => setToastMsg(null), 4000)
     } catch (e) {
       console.error('[MediaAssets] delete failed', e)
-      setError(String(e))
+      const msg = formatDeleteError(e)
+      setError(msg)
+      // Close confirm panel; error banner shows in the detail dialog.
+      setConfirmDeleteOpen(false)
     } finally {
       setDeleting(false)
     }
@@ -278,6 +312,11 @@ export function MediaAssetsPage() {
           {importMsg}
         </div>
       )}
+      {toastMsg && (
+        <div className="rounded-md border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-700 dark:text-emerald-300">
+          {toastMsg}
+        </div>
+      )}
 
       <div className="flex-1 overflow-auto rounded-lg border bg-card/30 p-3">
         {items.length === 0 && !loading ? (
@@ -354,8 +393,10 @@ export function MediaAssetsPage() {
         open={!!selected}
         onOpenChange={(open) => {
           if (!open) {
+            if (deleting) return
             setSelected(null)
             setCopied(false)
+            setConfirmDeleteOpen(false)
           }
         }}
       >
@@ -448,21 +489,56 @@ export function MediaAssetsPage() {
                 </div>
               )}
 
-              <div className="flex flex-wrap gap-2">
-                <Button variant="outline" size="sm" onClick={() => void toggleFavorite(selected)}>
-                  <Star className={clsx('h-4 w-4 mr-1.5', selected.favorite && 'fill-amber-400 text-amber-400')} />
-                  {selected.favorite ? '取消收藏' : '收藏'}
-                </Button>
-                <Button
-                  variant="destructive"
-                  size="sm"
-                  disabled={deleting}
-                  onClick={() => void deleteAsset(selected)}
-                >
-                  <Trash2 className="h-4 w-4 mr-1.5" />
-                  {deleting ? '删除中…' : '删除'}
-                </Button>
-              </div>
+              {error && (
+                <div className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive whitespace-pre-wrap">
+                  {error}
+                </div>
+              )}
+
+              {confirmDeleteOpen ? (
+                <div className="rounded-md border border-destructive/40 bg-destructive/5 p-3 space-y-3">
+                  <p className="text-sm whitespace-pre-wrap">
+                    {selected.cdnUrl?.trim()
+                      ? `确定删除「${selected.filename}」？\n将同时删除云端对象与本地记录，此操作不可撤销。`
+                      : `确定删除「${selected.filename}」？\n将删除本地记录，此操作不可撤销。`}
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={deleting}
+                      onClick={() => setConfirmDeleteOpen(false)}
+                    >
+                      取消
+                    </Button>
+                    <Button
+                      variant="destructive"
+                      size="sm"
+                      disabled={deleting}
+                      onClick={() => void confirmDelete()}
+                    >
+                      <Trash2 className="h-4 w-4 mr-1.5" />
+                      {deleting ? '删除中…' : '确认删除'}
+                    </Button>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex flex-wrap gap-2">
+                  <Button variant="outline" size="sm" onClick={() => void toggleFavorite(selected)}>
+                    <Star className={clsx('h-4 w-4 mr-1.5', selected.favorite && 'fill-amber-400 text-amber-400')} />
+                    {selected.favorite ? '取消收藏' : '收藏'}
+                  </Button>
+                  <Button
+                    variant="destructive"
+                    size="sm"
+                    disabled={deleting}
+                    onClick={requestDelete}
+                  >
+                    <Trash2 className="h-4 w-4 mr-1.5" />
+                    删除
+                  </Button>
+                </div>
+              )}
             </div>
           )}
         </DialogContent>
