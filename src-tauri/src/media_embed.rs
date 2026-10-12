@@ -8,12 +8,14 @@ use reqwest::blocking::Client;
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::media_assets::{
     ensure_tag, get_asset, init_schema, load_tags, open_db, set_asset_caption, MediaAsset,
@@ -107,11 +109,21 @@ fn save_config(user_data: &Path, cfg: &MediaEmbedConfig) -> Result<(), String> {
 // State
 // ──────────────────────────────────────────────────
 
-pub struct MediaEmbedState {
-    pub user_data_dir: PathBuf,
+#[derive(Debug, Clone)]
+pub struct CaptionJob {
+    pub status: String, // running | error
+    pub error: Option<String>,
+    pub started_at: i64,
 }
 
-pub type SharedMediaEmbedState = Arc<Mutex<MediaEmbedState>>;
+pub struct MediaEmbedState {
+    pub user_data_dir: PathBuf,
+    pub indexing: AtomicBool,
+    pub cancel_index: AtomicBool,
+    pub caption_jobs: Mutex<HashMap<String, CaptionJob>>,
+}
+
+pub type SharedMediaEmbedState = Arc<MediaEmbedState>;
 
 pub fn init(app: &AppHandle) -> SharedMediaEmbedState {
     let data_dir = app.path().app_data_dir().unwrap_or_else(|_| {
@@ -126,9 +138,12 @@ pub fn init(app: &AppHandle) -> SharedMediaEmbedState {
         let _ = init_schema(&conn);
         let _ = ensure_embed_schema(&conn);
     }
-    Arc::new(Mutex::new(MediaEmbedState {
+    Arc::new(MediaEmbedState {
         user_data_dir: user_data,
-    }))
+        indexing: AtomicBool::new(false),
+        cancel_index: AtomicBool::new(false),
+        caption_jobs: Mutex::new(HashMap::new()),
+    })
 }
 
 pub fn ensure_embed_schema(conn: &Connection) -> Result<(), String> {
@@ -626,9 +641,15 @@ pub struct EmbedStats {
     pub queued: i64,
     pub model: String,
     pub enabled: bool,
+    /// Background index worker is running.
+    pub indexing: bool,
 }
 
 pub fn embed_stats(user_data: &Path) -> Result<EmbedStats, String> {
+    embed_stats_ex(user_data, false)
+}
+
+pub fn embed_stats_ex(user_data: &Path, indexing: bool) -> Result<EmbedStats, String> {
     let cfg = load_config(user_data);
     let conn = open_db(user_data)?;
     init_schema(&conn)?;
@@ -660,6 +681,7 @@ pub fn embed_stats(user_data: &Path) -> Result<EmbedStats, String> {
         queued,
         model: cfg.model,
         enabled: cfg.enabled,
+        indexing,
     })
 }
 
@@ -885,6 +907,9 @@ pub struct AssetEmbedInfo {
     pub dims: Option<i64>,
     pub caption: Option<String>,
     pub queued: bool,
+    /// Background caption job: `running` | `error` | null when idle.
+    pub caption_status: Option<String>,
+    pub caption_error: Option<String>,
 }
 
 fn load_embed_info(conn: &Connection, asset_id: &str) -> AssetEmbedInfo {
@@ -936,6 +961,8 @@ fn load_embed_info(conn: &Connection, asset_id: &str) -> AssetEmbedInfo {
             dims: if dims > 0 { Some(dims) } else { None },
             caption,
             queued,
+            caption_status: None,
+            caption_error: None,
         },
         Err(_) => AssetEmbedInfo {
             asset_id: asset_id.to_string(),
@@ -946,6 +973,8 @@ fn load_embed_info(conn: &Connection, asset_id: &str) -> AssetEmbedInfo {
             dims: None,
             caption,
             queued,
+            caption_status: None,
+            caption_error: None,
         },
     }
 }
@@ -1008,6 +1037,8 @@ pub fn list_embed_statuses(user_data: &Path) -> Result<Vec<AssetEmbedInfo>, Stri
                 },
                 caption: caption.filter(|s| !s.trim().is_empty()),
                 queued: r.get::<_, i64>(7)? != 0,
+                caption_status: None,
+                caption_error: None,
             })
         })
         .map_err(|e| e.to_string())?;
@@ -1100,18 +1131,24 @@ pub fn generate_caption(user_data: &Path, asset_id: &str) -> Result<AssetEmbedIn
 // Tauri commands
 // ──────────────────────────────────────────────────
 
-fn user_data_from_embed(state: &State<SharedMediaEmbedState>) -> Result<PathBuf, String> {
-    let g = state.lock().map_err(|e| e.to_string())?;
-    Ok(g.user_data_dir.clone())
+fn user_data_from_embed(state: &State<SharedMediaEmbedState>) -> PathBuf {
+    state.user_data_dir.clone()
 }
 
+fn apply_caption_job(state: &MediaEmbedState, info: &mut AssetEmbedInfo) {
+    if let Ok(jobs) = state.caption_jobs.lock() {
+        if let Some(j) = jobs.get(&info.asset_id) {
+            info.caption_status = Some(j.status.clone());
+            info.caption_error = j.error.clone();
+        }
+    }
+}
 
 #[tauri::command]
 pub fn media_embed_get_config(
     state: State<SharedMediaEmbedState>,
 ) -> Result<MediaEmbedConfig, String> {
-    let ud = user_data_from_embed(&state)?;
-    Ok(load_config(&ud))
+    Ok(load_config(&user_data_from_embed(&state)))
 }
 
 #[tauri::command]
@@ -1119,7 +1156,7 @@ pub fn media_embed_save_config(
     state: State<SharedMediaEmbedState>,
     config: MediaEmbedConfigSave,
 ) -> Result<MediaEmbedConfig, String> {
-    let ud = user_data_from_embed(&state)?;
+    let ud = user_data_from_embed(&state);
     let mut cfg = load_config(&ud);
     if let Some(v) = config.enabled {
         cfg.enabled = v;
@@ -1151,31 +1188,111 @@ pub fn media_embed_save_config(
 
 #[tauri::command]
 pub fn media_embed_test(state: State<SharedMediaEmbedState>) -> Result<Value, String> {
-    let ud = user_data_from_embed(&state)?;
+    let ud = user_data_from_embed(&state);
     test_ollama(&ud)
 }
 
 #[tauri::command]
 pub fn media_embed_stats(state: State<SharedMediaEmbedState>) -> Result<EmbedStats, String> {
-    let ud = user_data_from_embed(&state)?;
-    embed_stats(&ud)
+    let ud = user_data_from_embed(&state);
+    let indexing = state.indexing.load(Ordering::SeqCst);
+    embed_stats_ex(&ud, indexing)
 }
 
 #[tauri::command]
 pub fn media_embed_enqueue_missing(
     state: State<SharedMediaEmbedState>,
 ) -> Result<i64, String> {
-    let ud = user_data_from_embed(&state)?;
+    let ud = user_data_from_embed(&state);
     enqueue_missing(&ud)
 }
 
+/// Process one batch synchronously (kept for diagnostics). Prefer `media_embed_start_indexing`.
 #[tauri::command]
 pub fn media_embed_process_queue(
     state: State<SharedMediaEmbedState>,
     limit: Option<i64>,
 ) -> Result<IndexBatchResult, String> {
-    let ud = user_data_from_embed(&state)?;
+    let ud = user_data_from_embed(&state);
     process_queue(&ud, limit.unwrap_or(8))
+}
+
+/// Start a background worker that enqueues missing assets and processes until empty or cancelled.
+/// Returns immediately so the UI stays responsive; poll `media_embed_stats` or listen for events.
+#[tauri::command]
+pub fn media_embed_start_indexing(
+    app: AppHandle,
+    state: State<SharedMediaEmbedState>,
+    batch_size: Option<i64>,
+) -> Result<Value, String> {
+    let ud = user_data_from_embed(&state);
+    let cfg = load_config(&ud);
+    if !cfg.enabled {
+        return Err("media embed is disabled".into());
+    }
+    if state.indexing.swap(true, Ordering::SeqCst) {
+        return Ok(json!({
+            "started": false,
+            "alreadyRunning": true,
+            "indexing": true,
+        }));
+    }
+    state.cancel_index.store(false, Ordering::SeqCst);
+    let enqueued = match enqueue_missing(&ud) {
+        Ok(n) => n,
+        Err(e) => {
+            state.indexing.store(false, Ordering::SeqCst);
+            return Err(e);
+        }
+    };
+    let batch = batch_size.unwrap_or(8).max(1).min(50);
+    let rt: SharedMediaEmbedState = Arc::clone(&state);
+    let ud_bg = ud.clone();
+    std::thread::spawn(move || {
+        log::info!("[MediaEmbed] index worker started (batch={batch}, enqueued≈{enqueued})");
+        loop {
+            if rt.cancel_index.load(Ordering::SeqCst) {
+                log::info!("[MediaEmbed] index worker cancelled");
+                break;
+            }
+            match process_queue(&ud_bg, batch) {
+                Ok(res) => {
+                    let stats = embed_stats_ex(&ud_bg, true).ok();
+                    let _ = app.emit(
+                        "media-embed://index-progress",
+                        json!({ "batch": res, "stats": stats }),
+                    );
+                    if res.remaining <= 0 || res.processed == 0 {
+                        break;
+                    }
+                }
+                Err(e) => {
+                    log::warn!("[MediaEmbed] index loop error: {e}");
+                    let _ = app.emit("media-embed://index-error", json!({ "error": e }));
+                    break;
+                }
+            }
+        }
+        rt.indexing.store(false, Ordering::SeqCst);
+        rt.cancel_index.store(false, Ordering::SeqCst);
+        let stats = embed_stats_ex(&ud_bg, false).ok();
+        let _ = app.emit("media-embed://index-done", json!({ "stats": stats }));
+        log::info!("[MediaEmbed] index worker finished");
+    });
+    Ok(json!({
+        "started": true,
+        "enqueued": enqueued,
+        "indexing": true,
+    }))
+}
+
+#[tauri::command]
+pub fn media_embed_stop_indexing(state: State<SharedMediaEmbedState>) -> Result<Value, String> {
+    if !state.indexing.load(Ordering::SeqCst) {
+        return Ok(json!({ "stopping": false, "indexing": false }));
+    }
+    state.cancel_index.store(true, Ordering::SeqCst);
+    Ok(json!({ "stopping": true, "indexing": true }))
 }
 
 #[tauri::command]
@@ -1183,7 +1300,7 @@ pub fn media_embed_index_one(
     state: State<SharedMediaEmbedState>,
     asset_id: String,
 ) -> Result<IndexOneResult, String> {
-    let ud = user_data_from_embed(&state)?;
+    let ud = user_data_from_embed(&state);
     index_asset(&ud, &asset_id)
 }
 
@@ -1194,7 +1311,7 @@ pub fn media_embed_semantic_search(
     limit: Option<i64>,
     media_kind: Option<String>,
 ) -> Result<SemanticSearchResult, String> {
-    let ud = user_data_from_embed(&state)?;
+    let ud = user_data_from_embed(&state);
     semantic_search(
         &ud,
         &query,
@@ -1207,8 +1324,17 @@ pub fn media_embed_semantic_search(
 pub fn media_embed_list_statuses(
     state: State<SharedMediaEmbedState>,
 ) -> Result<Vec<AssetEmbedInfo>, String> {
-    let ud = user_data_from_embed(&state)?;
-    list_embed_statuses(&ud)
+    let ud = user_data_from_embed(&state);
+    let mut list = list_embed_statuses(&ud)?;
+    if let Ok(jobs) = state.caption_jobs.lock() {
+        for info in &mut list {
+            if let Some(j) = jobs.get(&info.asset_id) {
+                info.caption_status = Some(j.status.clone());
+                info.caption_error = j.error.clone();
+            }
+        }
+    }
+    Ok(list)
 }
 
 #[tauri::command]
@@ -1216,17 +1342,93 @@ pub fn media_embed_get_asset_info(
     state: State<SharedMediaEmbedState>,
     asset_id: String,
 ) -> Result<AssetEmbedInfo, String> {
-    let ud = user_data_from_embed(&state)?;
-    get_asset_embed_info(&ud, &asset_id)
+    let ud = user_data_from_embed(&state);
+    let mut info = get_asset_embed_info(&ud, &asset_id)?;
+    apply_caption_job(&state, &mut info);
+    Ok(info)
 }
 
+/// Blocking caption (legacy). Prefer `media_embed_start_caption` for UI.
 #[tauri::command]
 pub fn media_embed_generate_caption(
     state: State<SharedMediaEmbedState>,
     asset_id: String,
 ) -> Result<AssetEmbedInfo, String> {
-    let ud = user_data_from_embed(&state)?;
+    let ud = user_data_from_embed(&state);
     generate_caption(&ud, &asset_id)
+}
+
+/// Start caption generation on a background thread; returns immediately.
+/// Listen for `media-embed://caption-done` / `media-embed://caption-error`, or poll get_asset_info.
+#[tauri::command]
+pub fn media_embed_start_caption(
+    app: AppHandle,
+    state: State<SharedMediaEmbedState>,
+    asset_id: String,
+) -> Result<Value, String> {
+    let ud = user_data_from_embed(&state);
+    let asset = get_asset(&ud, &asset_id)?.ok_or_else(|| "asset not found".to_string())?;
+    let is_image = asset.media_kind == "image"
+        || asset.mime_type.to_lowercase().starts_with("image/");
+    if !is_image {
+        return Err("caption is only supported for images".into());
+    }
+    {
+        let mut jobs = state
+            .caption_jobs
+            .lock()
+            .map_err(|e| e.to_string())?;
+        if let Some(j) = jobs.get(&asset_id) {
+            if j.status == "running" {
+                return Ok(json!({
+                    "started": false,
+                    "alreadyRunning": true,
+                    "assetId": asset_id,
+                }));
+            }
+        }
+        jobs.insert(
+            asset_id.clone(),
+            CaptionJob {
+                status: "running".into(),
+                error: None,
+                started_at: now_ms(),
+            },
+        );
+    }
+    let rt: SharedMediaEmbedState = Arc::clone(&state);
+    let id = asset_id.clone();
+    let ud_bg = ud.clone();
+    std::thread::spawn(move || {
+        log::info!("[MediaEmbed] caption job started for {id}");
+        match generate_caption(&ud_bg, &id) {
+            Ok(info) => {
+                if let Ok(mut jobs) = rt.caption_jobs.lock() {
+                    jobs.remove(&id);
+                }
+                let _ = app.emit("media-embed://caption-done", &info);
+                log::info!("[MediaEmbed] caption job done for {id}");
+            }
+            Err(e) => {
+                if let Ok(mut jobs) = rt.caption_jobs.lock() {
+                    jobs.insert(
+                        id.clone(),
+                        CaptionJob {
+                            status: "error".into(),
+                            error: Some(e.clone()),
+                            started_at: now_ms(),
+                        },
+                    );
+                }
+                let _ = app.emit(
+                    "media-embed://caption-error",
+                    json!({ "assetId": id, "error": e }),
+                );
+                log::warn!("[MediaEmbed] caption job failed: {}", id);
+            }
+        }
+    });
+    Ok(json!({ "started": true, "assetId": asset_id }))
 }
 
 /// Called after ingest — enqueue then index one asset on a background thread.

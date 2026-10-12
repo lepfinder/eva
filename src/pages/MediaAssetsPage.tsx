@@ -19,6 +19,7 @@ import {
   X,
 } from 'lucide-react'
 import { invoke } from '@tauri-apps/api/core'
+import { listen } from '@tauri-apps/api/event'
 import { Button, buttonVariants } from '@/components/ui/button'
 import { Progress } from '@/components/ui/progress'
 import { Badge } from '@/components/ui/badge'
@@ -94,6 +95,7 @@ interface EmbedStats {
   queued: number
   model: string
   enabled: boolean
+  indexing?: boolean
 }
 
 interface MediaEmbedConfig {
@@ -114,6 +116,8 @@ interface AssetEmbedInfo {
   dims?: number | null
   caption?: string | null
   queued: boolean
+  captionStatus?: string | null
+  captionError?: string | null
 }
 
 function KindIcon({ kind }: { kind: string }) {
@@ -425,6 +429,7 @@ export function MediaAssetsPage() {
   useEffect(() => {
     if (!selected) {
       setDetailEmbed(null)
+      setCaptionGenerating(false)
       return
     }
     let cancelled = false
@@ -433,10 +438,14 @@ export function MediaAssetsPage() {
         const info = await invoke<AssetEmbedInfo>('media_embed_get_asset_info', {
           assetId: selected.id,
         })
-        if (!cancelled) setDetailEmbed(info)
+        if (!cancelled) {
+          setDetailEmbed(info)
+          setCaptionGenerating(info.captionStatus === 'running')
+        }
       } catch {
         if (!cancelled) {
           setDetailEmbed(embedStatusMap[selected.id] ?? null)
+          setCaptionGenerating(false)
         }
       }
     })()
@@ -446,27 +455,50 @@ export function MediaAssetsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selected?.id])
 
+  const applyCaptionInfo = useCallback(
+    (info: AssetEmbedInfo) => {
+      setDetailEmbed(info)
+      setEmbedStatusMap((prev) => ({ ...prev, [info.assetId]: info }))
+      if (info.caption) {
+        setSelected((prev) => (prev && prev.id === info.assetId ? { ...prev, caption: info.caption } : prev))
+        setItems((prev) =>
+          prev.map((a) => (a.id === info.assetId ? { ...a, caption: info.caption } : a)),
+        )
+      }
+      const running = info.captionStatus === 'running'
+      setCaptionGenerating(running)
+      if (info.captionStatus === 'error' && info.captionError) {
+        setError(info.captionError)
+      }
+    },
+    [],
+  )
+
   const generateCaption = async () => {
     if (!selected || captionGenerating) return
     setCaptionGenerating(true)
     setError(null)
+    const assetId = selected.id
     try {
-      const info = await invoke<AssetEmbedInfo>('media_embed_generate_caption', {
-        assetId: selected.id,
+      await invoke<{ started: boolean; alreadyRunning?: boolean }>('media_embed_start_caption', {
+        assetId,
       })
-      setDetailEmbed(info)
-      setEmbedStatusMap((prev) => ({ ...prev, [info.assetId]: info }))
-      if (info.caption) {
-        setSelected({ ...selected, caption: info.caption })
-        setItems((prev) =>
-          prev.map((a) => (a.id === selected.id ? { ...a, caption: info.caption } : a)),
-        )
-      }
-      showToast('描述已生成')
+      setDetailEmbed((prev) =>
+        prev && prev.assetId === assetId
+          ? { ...prev, captionStatus: 'running', captionError: null }
+          : {
+              assetId,
+              status: prev?.status ?? 'pending',
+              queued: prev?.queued ?? false,
+              caption: prev?.caption ?? selected.caption,
+              captionStatus: 'running',
+              captionError: null,
+            },
+      )
+      showToast('正在生成描述…')
     } catch (e) {
-      setError(String(e))
-    } finally {
       setCaptionGenerating(false)
+      setError(String(e))
     }
   }
 
@@ -702,24 +734,136 @@ export function MediaAssetsPage() {
     setIndexing(true)
     setError(null)
     try {
-      const missing = await invoke<number>('media_embed_enqueue_missing')
-      const batch = await invoke<{ processed: number; succeeded: number; failed: number; remaining: number }>(
-        'media_embed_process_queue',
-        { limit: 12 },
+      const res = await invoke<{ started: boolean; alreadyRunning?: boolean; enqueued?: number }>(
+        'media_embed_start_indexing',
+        { batchSize: 8 },
       )
-      showToast(
-        `索引完成：入队 ${missing} · 成功 ${batch.succeeded} · 失败 ${batch.failed} · 剩余 ${batch.remaining}`,
-      )
+      if (res.alreadyRunning) {
+        showToast('索引已在后台运行')
+      } else {
+        showToast(`已开始后台索引${typeof res.enqueued === 'number' ? `（入队 ${res.enqueued}）` : ''}…`)
+      }
       await refreshEmbedStats()
-      if (semanticMode) await load()
     } catch (e) {
-      setError(String(e))
-    } finally {
       setIndexing(false)
+      setError(String(e))
     }
   }
 
+  const stopIndexing = async () => {
+    try {
+      await invoke('media_embed_stop_indexing')
+      showToast('正在停止索引…')
+    } catch (e) {
+      setError(String(e))
+    }
+  }
+
+  // Poll embed stats while background indexing runs.
+  useEffect(() => {
+    if (!indexing && !embedStats?.indexing) return
+    const t = window.setInterval(() => {
+      void refreshEmbedStats()
+    }, 1200)
+    return () => window.clearInterval(t)
+  }, [indexing, embedStats?.indexing, refreshEmbedStats])
+
+  // Sync local indexing flag from stats.
+  useEffect(() => {
+    if (typeof embedStats?.indexing === 'boolean') {
+      setIndexing(embedStats.indexing)
+    }
+  }, [embedStats?.indexing])
+
+  // Poll caption status for open detail while generating.
+  useEffect(() => {
+    if (!selected || !captionGenerating) return
+    const assetId = selected.id
+    let cancelled = false
+    const tick = async () => {
+      try {
+        const info = await invoke<AssetEmbedInfo>('media_embed_get_asset_info', { assetId })
+        if (cancelled) return
+        const stillRunning = info.captionStatus === 'running'
+        applyCaptionInfo(info)
+        if (!stillRunning) {
+          if (info.captionStatus === 'error') {
+            /* error surfaced via applyCaptionInfo */
+          } else if (info.caption) {
+            showToast('描述已生成')
+          }
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+    const t = window.setInterval(() => {
+      void tick()
+    }, 1500)
+    void tick()
+    return () => {
+      cancelled = true
+      window.clearInterval(t)
+    }
+  }, [selected?.id, captionGenerating, applyCaptionInfo, showToast])
+
+  // Background job events.
+  useEffect(() => {
+    let unsubs: Array<() => void> = []
+    void (async () => {
+      try {
+        unsubs.push(
+          await listen<{ stats?: EmbedStats }>('media-embed://index-progress', (ev) => {
+            if (ev.payload?.stats) setEmbedStats(ev.payload.stats)
+            setIndexing(true)
+            void refreshEmbedStats()
+          }),
+        )
+        unsubs.push(
+          await listen<{ stats?: EmbedStats }>('media-embed://index-done', (ev) => {
+            if (ev.payload?.stats) setEmbedStats(ev.payload.stats)
+            setIndexing(false)
+            void refreshEmbedStats()
+            showToast('索引完成')
+          }),
+        )
+        unsubs.push(
+          await listen<{ error?: string }>('media-embed://index-error', (ev) => {
+            setIndexing(false)
+            if (ev.payload?.error) setError(ev.payload.error)
+            void refreshEmbedStats()
+          }),
+        )
+        unsubs.push(
+          await listen<AssetEmbedInfo>('media-embed://caption-done', (ev) => {
+            applyCaptionInfo({ ...ev.payload, captionStatus: null, captionError: null })
+            setCaptionGenerating(false)
+            showToast('描述已生成')
+          }),
+        )
+        unsubs.push(
+          await listen<{ assetId: string; error: string }>('media-embed://caption-error', (ev) => {
+            const { assetId, error } = ev.payload
+            setCaptionGenerating(false)
+            setError(error)
+            setDetailEmbed((prev) =>
+              prev && prev.assetId === assetId
+                ? { ...prev, captionStatus: 'error', captionError: error }
+                : prev,
+            )
+          }),
+        )
+      } catch {
+        /* not in tauri */
+      }
+    })()
+    return () => {
+      for (const u of unsubs) u()
+    }
+  }, [applyCaptionInfo, refreshEmbedStats, showToast])
+
   const openEmbedCfg = async () => {
+
     try {
       const cfg = await invoke<MediaEmbedConfig>('media_embed_get_config')
       setEmbedCfg(cfg)
@@ -1250,19 +1394,32 @@ export function MediaAssetsPage() {
                           ) : (
                             <Sparkles className="h-3.5 w-3.5 mr-1" />
                           )}
-                          {detailEmbed?.caption || selected.caption ? '重新生成' : '生成描述'}
+                          {captionGenerating || detailEmbed?.captionStatus === 'running'
+                            ? '生成中…'
+                            : detailEmbed?.caption || selected.caption
+                              ? '重新生成'
+                              : '生成描述'}
                         </Button>
                       )}
                     </div>
+                    {captionGenerating || detailEmbed?.captionStatus === 'running' ? (
+                      <p className="text-xs text-muted-foreground flex items-center gap-1.5">
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        正在生成描述，可继续浏览…
+                      </p>
+                    ) : null}
+                    {detailEmbed?.captionStatus === 'error' && detailEmbed.captionError ? (
+                      <p className="text-xs text-destructive whitespace-pre-wrap">{detailEmbed.captionError}</p>
+                    ) : null}
                     {(detailEmbed?.caption || selected.caption) ? (
                       <p className="text-xs whitespace-pre-wrap rounded-md border bg-background p-2">
                         {detailEmbed?.caption || selected.caption}
                       </p>
-                    ) : (
+                    ) : !(captionGenerating || detailEmbed?.captionStatus === 'running') ? (
                       <p className="text-xs text-muted-foreground">
                         暂无描述。可用 Ollama 视觉模型（默认 qwen3-vl:8b）生成；自动标签见上方 tags。
                       </p>
-                    )}
+                    ) : null}
                   </div>
                 </div>
 
@@ -1366,19 +1523,29 @@ export function MediaAssetsPage() {
                   {embedStats?.errors ? <span className="text-destructive">失败 {embedStats.errors}</span> : null}
                   {embedStats?.model ? <span className="font-mono truncate max-w-[180px]">{embedStats.model}</span> : null}
                 </div>
-                <Button
-                  size="sm"
-                  className="w-full"
-                  onClick={() => void runIndexBatch()}
-                  disabled={indexing}
-                >
+                <div className="flex gap-2">
+                  <Button
+                    size="sm"
+                    className="flex-1"
+                    onClick={() => void runIndexBatch()}
+                    disabled={indexing}
+                  >
+                    {indexing ? (
+                      <Loader2 className="h-4 w-4 mr-1.5 animate-spin" />
+                    ) : (
+                      <Brain className="h-4 w-4 mr-1.5" />
+                    )}
+                    {indexing ? '索引中…' : '开始索引'}
+                  </Button>
                   {indexing ? (
-                    <Loader2 className="h-4 w-4 mr-1.5 animate-spin" />
-                  ) : (
-                    <Brain className="h-4 w-4 mr-1.5" />
-                  )}
-                  {indexing ? '索引中…' : '索引一批（约 12 条）'}
-                </Button>
+                    <Button size="sm" variant="outline" onClick={() => void stopIndexing()}>
+                      停止
+                    </Button>
+                  ) : null}
+                </div>
+                {indexing ? (
+                  <p className="text-[10px] text-muted-foreground">后台运行中，界面可正常操作；进度会自动刷新。</p>
+                ) : null}
               </div>
 
               {embedCfg && (

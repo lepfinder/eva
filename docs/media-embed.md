@@ -13,13 +13,17 @@
 - Image assets: download/thumbnail → Ollama embed with `<|image|>` + `images[]`
 - New uploads enqueue + background index
 - Coarse auto-tags from nearest labeled neighbors (kind `auto`)
-- UI: 「语义」toggle, 「索引」batch, settings dialog (Ollama URL / model)
+- UI: 「语义」toggle, 「开始索引」background worker + stop, settings dialog (Ollama URL / model)
+- Index/caption run on background threads (no UI freeze); progress via stats poll + events
 - Grid badges: 已索引 / 未索引 / 索引失败 / 排队中
 - Detail: embed status, model, indexed_at, error; AI caption + 「生成描述」
 
 ## Commands
 - `media_embed_list_statuses` / `media_embed_get_asset_info`
-- `media_embed_generate_caption` → Ollama `/api/chat` + image → stores `assets.caption`
+- `media_embed_start_indexing` / `media_embed_stop_indexing` — background loop until queue empty
+- `media_embed_start_caption` — background VLM caption; events `media-embed://caption-done|error`
+- `media_embed_generate_caption` (legacy sync) → Ollama `/api/chat` + image → stores `assets.caption`
+- Events: `media-embed://index-progress|index-done|index-error`
 
 ## Deferred
 - Auto-caption on every index when `captionEnabled` (currently on-demand via UI)
