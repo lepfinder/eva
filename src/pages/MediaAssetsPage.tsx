@@ -91,7 +91,9 @@ export function MediaAssetsPage() {
   const [error, setError] = useState<string | null>(null)
   const [deleting, setDeleting] = useState(false)
   const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false)
+  const [confirmDeleteCardId, setConfirmDeleteCardId] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
+  const [copiedCardId, setCopiedCardId] = useState<string | null>(null)
   const [importing, setImporting] = useState(false)
   const [importMsg, setImportMsg] = useState<string | null>(null)
   const [toastMsg, setToastMsg] = useState<string | null>(null)
@@ -137,15 +139,36 @@ export function MediaAssetsPage() {
     }
   }
 
-  const copyUrl = async (url: string) => {
+  const assetCopyUrl = (asset: MediaAsset): string | null => {
+    const url = asset.cdnUrl?.trim() || asset.localPath?.trim() || null
+    return url || null
+  }
+
+  const copyUrl = async (url: string, opts?: { cardId?: string }) => {
     try {
       await navigator.clipboard.writeText(url)
-      setCopied(true)
-      window.setTimeout(() => setCopied(false), 1500)
+      if (opts?.cardId) {
+        setCopiedCardId(opts.cardId)
+        window.setTimeout(() => {
+          setCopiedCardId((cur) => (cur === opts.cardId ? null : cur))
+        }, 1500)
+      } else {
+        setCopied(true)
+        window.setTimeout(() => setCopied(false), 1500)
+      }
     } catch (e) {
       console.error('[MediaAssets] copy failed', e)
       setError('复制失败')
     }
+  }
+
+  const copyAsset = async (asset: MediaAsset) => {
+    const url = assetCopyUrl(asset)
+    if (!url) {
+      setError('该素材没有可复制的 URL')
+      return
+    }
+    await copyUrl(url, { cardId: asset.id })
   }
 
   const formatDeleteError = (e: unknown): string => {
@@ -163,13 +186,22 @@ export function MediaAssetsPage() {
   const requestDelete = () => {
     if (!selected || deleting) return
     setError(null)
+    setConfirmDeleteCardId(null)
     setConfirmDeleteOpen(true)
   }
 
-  const confirmDelete = async () => {
-    const asset = selected
-    if (!asset) {
+  const requestDeleteCard = (asset: MediaAsset) => {
+    if (deleting) return
+    setError(null)
+    setConfirmDeleteOpen(false)
+    setConfirmDeleteCardId(asset.id)
+  }
+
+  const confirmDelete = async (asset?: MediaAsset | null) => {
+    const target = asset ?? selected
+    if (!target) {
       setConfirmDeleteOpen(false)
+      setConfirmDeleteCardId(null)
       return
     }
 
@@ -179,24 +211,25 @@ export function MediaAssetsPage() {
     try {
       const res = await invoke<{ id: string; cloudDeleted: boolean; localFileDeleted: boolean }>(
         'media_assets_delete',
-        { id: asset.id },
+        { id: target.id },
       )
-      setItems((prev) => prev.filter((x) => x.id !== asset.id))
+      setItems((prev) => prev.filter((x) => x.id !== target.id))
       setTotal((t) => Math.max(0, t - 1))
-      setSelected(null)
+      if (selected?.id === target.id) setSelected(null)
       setConfirmDeleteOpen(false)
+      setConfirmDeleteCardId(null)
       setToastMsg(
         res.cloudDeleted
-          ? `已删除「${asset.filename}」（云端 + 本地）`
-          : `已删除「${asset.filename}」（仅本地）`,
+          ? `已删除「${target.filename}」（云端 + 本地）`
+          : `已删除「${target.filename}」（仅本地）`,
       )
       window.setTimeout(() => setToastMsg(null), 4000)
     } catch (e) {
       console.error('[MediaAssets] delete failed', e)
       const msg = formatDeleteError(e)
       setError(msg)
-      // Close confirm panel; error banner shows in the detail dialog.
       setConfirmDeleteOpen(false)
+      setConfirmDeleteCardId(null)
     } finally {
       setDeleting(false)
     }
@@ -331,58 +364,143 @@ export function MediaAssetsPage() {
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5 gap-3">
             {items.map((asset) => {
               const url = previewUrl(asset)
+              const cardConfirming = confirmDeleteCardId === asset.id
+              const cardCopied = copiedCardId === asset.id
+              const toolbarVisible = cardConfirming || cardCopied
               return (
-                <button
+                <div
                   key={asset.id}
-                  type="button"
-                  onClick={() => setSelected(asset)}
                   className="group relative overflow-hidden rounded-lg border bg-background text-left transition hover:border-primary/40 hover:shadow-sm"
                 >
-                  <div className="aspect-square bg-muted/40 flex items-center justify-center overflow-hidden">
-                    {url && asset.mediaKind === 'image' ? (
-                      <img src={url} alt={asset.filename} className="h-full w-full object-cover" loading="lazy" />
-                    ) : (
-                      <KindIcon kind={asset.mediaKind} />
-                    )}
-                  </div>
-                  <div className="p-2 space-y-1">
-                    <div className="flex items-start gap-1">
-                      <p className="flex-1 truncate text-xs font-medium">{asset.filename}</p>
-                      <span
-                        role="button"
-                        tabIndex={0}
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          void toggleFavorite(asset)
-                        }}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') {
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setConfirmDeleteCardId(null)
+                      setSelected(asset)
+                    }}
+                    className="w-full text-left"
+                  >
+                    <div className="aspect-square bg-muted/40 flex items-center justify-center overflow-hidden relative">
+                      {url && asset.mediaKind === 'image' ? (
+                        <img src={url} alt={asset.filename} className="h-full w-full object-cover" loading="lazy" />
+                      ) : (
+                        <KindIcon kind={asset.mediaKind} />
+                      )}
+                    </div>
+                    <div className="p-2 space-y-1">
+                      <div className="flex items-start gap-1">
+                        <p className="flex-1 truncate text-xs font-medium">{asset.filename}</p>
+                        <span
+                          role="button"
+                          tabIndex={0}
+                          onClick={(e) => {
                             e.stopPropagation()
                             void toggleFavorite(asset)
-                          }
-                        }}
-                        className="shrink-0"
-                      >
-                        <Star
-                          className={clsx(
-                            'h-3.5 w-3.5',
-                            asset.favorite ? 'fill-amber-400 text-amber-400' : 'text-muted-foreground opacity-40 group-hover:opacity-80'
-                          )}
-                        />
-                      </span>
-                    </div>
-                    <div className="flex flex-wrap gap-1">
-                      <Badge variant="outline" className="text-[10px] px-1 py-0">
-                        {asset.mediaKind}
-                      </Badge>
-                      {asset.tags.slice(0, 2).map((t) => (
-                        <Badge key={t.id} variant="secondary" className="text-[10px] px-1 py-0">
-                          {t.name}
+                          }}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              e.stopPropagation()
+                              void toggleFavorite(asset)
+                            }
+                          }}
+                          className="shrink-0"
+                        >
+                          <Star
+                            className={clsx(
+                              'h-3.5 w-3.5',
+                              asset.favorite ? 'fill-amber-400 text-amber-400' : 'text-muted-foreground opacity-40 group-hover:opacity-80'
+                            )}
+                          />
+                        </span>
+                      </div>
+                      <div className="flex flex-wrap gap-1">
+                        <Badge variant="outline" className="text-[10px] px-1 py-0">
+                          {asset.mediaKind}
                         </Badge>
-                      ))}
+                        {asset.tags.slice(0, 2).map((t) => (
+                          <Badge key={t.id} variant="secondary" className="text-[10px] px-1 py-0">
+                            {t.name}
+                          </Badge>
+                        ))}
+                      </div>
                     </div>
+                  </button>
+
+                  {/* 悬浮工具条：复制 URL / 删除（页内二次确认） */}
+                  <div
+                    className={clsx(
+                      'absolute left-2 right-2 top-2 z-10 transition-opacity',
+                      toolbarVisible ? 'opacity-100' : 'opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto',
+                    )}
+                    onClick={(e) => e.stopPropagation()}
+                    onPointerDown={(e) => e.stopPropagation()}
+                  >
+                    {cardConfirming ? (
+                      <div className="rounded-md border border-destructive/40 bg-background/95 backdrop-blur-sm shadow-sm p-1.5 space-y-1.5">
+                        <p className="px-1 text-[10px] leading-snug text-destructive">
+                          {asset.cdnUrl?.trim()
+                            ? '删除云端 + 本地？'
+                            : '确定删除本地记录？'}
+                        </p>
+                        <div className="flex gap-1">
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            className="h-7 flex-1 px-1.5 text-[11px]"
+                            disabled={deleting}
+                            onClick={() => setConfirmDeleteCardId(null)}
+                          >
+                            取消
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="destructive"
+                            size="sm"
+                            className="h-7 flex-1 px-1.5 text-[11px]"
+                            disabled={deleting}
+                            onClick={() => void confirmDelete(asset)}
+                          >
+                            {deleting && confirmDeleteCardId === asset.id ? '删除中…' : '确认'}
+                          </Button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="flex items-center justify-end gap-1">
+                        <div className="inline-flex items-center gap-1 rounded-md border bg-background/95 backdrop-blur-sm shadow-sm p-0.5">
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            className="h-7 px-2 text-[11px]"
+                            title="复制 URL"
+                            disabled={!assetCopyUrl(asset)}
+                            onClick={() => void copyAsset(asset)}
+                          >
+                            {cardCopied ? (
+                              <Check className="h-3.5 w-3.5 mr-1 text-emerald-500" />
+                            ) : (
+                              <Copy className="h-3.5 w-3.5 mr-1" />
+                            )}
+                            {cardCopied ? '已复制' : '复制'}
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            className="h-7 px-2 text-[11px] text-destructive hover:text-destructive"
+                            title="删除"
+                            disabled={deleting}
+                            onClick={() => requestDeleteCard(asset)}
+                          >
+                            <Trash2 className="h-3.5 w-3.5 mr-1" />
+                            删除
+                          </Button>
+                        </div>
+                      </div>
+                    )}
                   </div>
-                </button>
+                </div>
               )
             })}
           </div>
@@ -397,6 +515,7 @@ export function MediaAssetsPage() {
             setSelected(null)
             setCopied(false)
             setConfirmDeleteOpen(false)
+            setConfirmDeleteCardId(null)
           }
         }}
       >
