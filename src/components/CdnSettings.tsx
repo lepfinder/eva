@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import { invoke } from '@tauri-apps/api/core'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -9,6 +10,7 @@ import {
   CloudUpload,
   Eye,
   EyeOff,
+  Images,
   Loader2,
   RefreshCw,
   XCircle,
@@ -46,6 +48,8 @@ export function CdnSettings(): React.ReactElement {
   const [saving, setSaving] = useState(false)
   const [testing, setTesting] = useState(false)
   const [importing, setImporting] = useState(false)
+  const [importingGallery, setImportingGallery] = useState(false)
+  const [galleryMsg, setGalleryMsg] = useState<string | null>(null)
   const [saveOk, setSaveOk] = useState(false)
   const [testMsg, setTestMsg] = useState<{ ok: boolean; text: string } | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -135,6 +139,34 @@ export function CdnSettings(): React.ReactElement {
       setError(String(e?.message || e))
     } finally {
       setImporting(false)
+    }
+  }
+
+  const importPiclistGallery = async () => {
+    if (importingGallery) return
+    setImportingGallery(true)
+    setGalleryMsg(null)
+    setError(null)
+    try {
+      const res = await invoke<{
+        total: number
+        inserted: number
+        updated: number
+        skipped: number
+        failed: number
+        failures: { id?: string; imgUrl?: string; reason: string }[]
+      }>('media_assets_import_piclist')
+      const failHint =
+        res.failed > 0 && res.failures?.length
+          ? `；失败例: ${res.failures[0].reason}`
+          : ''
+      setGalleryMsg(
+        `PicList 相册 ${res.total} 项 → 新增 ${res.inserted} / 更新 ${res.updated} / 跳过 ${res.skipped} / 失败 ${res.failed}${failHint}`,
+      )
+    } catch (e: any) {
+      setError(String(e?.message || e))
+    } finally {
+      setImportingGallery(false)
     }
   }
 
@@ -339,7 +371,7 @@ export function CdnSettings(): React.ReactElement {
             </Button>
             <Button variant="secondary" onClick={importPiclist} disabled={importing} className="gap-1.5">
               {importing ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-              从 PicList 导入
+              从 PicList 导入配置
             </Button>
             {saveOk && (
               <span className="inline-flex items-center gap-1 text-xs text-emerald-600">
@@ -362,6 +394,36 @@ export function CdnSettings(): React.ReactElement {
                 <XCircle className="h-4 w-4 shrink-0 mt-0.5" />
               )}
               <span className="whitespace-pre-wrap">{testMsg.text}</span>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">迁移</CardTitle>
+          <CardDescription>
+            一次性从本机 PicList 相册抄入素材库（按 URL 去重，不写入图床密钥）
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => void importPiclistGallery()}
+            disabled={importingGallery}
+            className="gap-1.5"
+          >
+            {importingGallery ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Images className="h-4 w-4" />
+            )}
+            {importingGallery ? '导入中…' : '从 PicList 导入相册'}
+          </Button>
+          {galleryMsg && (
+            <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/5 px-4 py-3 text-xs text-emerald-700 whitespace-pre-wrap">
+              {galleryMsg}
             </div>
           )}
         </CardContent>
