@@ -50,16 +50,6 @@ const navGroups = [
     ]
   },
   {
-    title: 'ACTION',
-    items: [
-      { id: 'navigation', labelKey: 'nav.navigation', icon: <Compass className="h-5 w-5" /> },
-      { id: 'localports', labelKey: 'nav.localports', icon: <Radio className="h-5 w-5" /> },
-      { id: 'memory', labelKey: 'nav.memory', icon: <Activity className="h-5 w-5" /> },
-      { id: 'envdetector', labelKey: 'nav.envdetector', icon: <SearchCode className="h-5 w-5" /> },
-      { id: 'toolbox', labelKey: 'nav.toolbox', icon: <Wrench className="h-5 w-5" /> }
-    ]
-  },
-  {
     title: 'LIBRARY',
     items: [
       { id: 'mediaassets', labelKey: 'nav.mediaassets', icon: <Images className="h-5 w-5" /> }
@@ -72,6 +62,16 @@ const navGroups = [
       { id: 'timeauditor', labelKey: 'nav.timeauditor', icon: <Timer className="h-5 w-5" /> },
       { id: 'visualrecall', labelKey: 'nav.visualrecall', icon: <MonitorPlay className="h-5 w-5" /> },
       { id: 'vault', labelKey: 'nav.vault', icon: <Lock className="h-5 w-5" /> }
+    ]
+  },
+  {
+    title: 'ACTION',
+    items: [
+      { id: 'navigation', labelKey: 'nav.navigation', icon: <Compass className="h-5 w-5" /> },
+      { id: 'localports', labelKey: 'nav.localports', icon: <Radio className="h-5 w-5" /> },
+      { id: 'memory', labelKey: 'nav.memory', icon: <Activity className="h-5 w-5" /> },
+      { id: 'envdetector', labelKey: 'nav.envdetector', icon: <SearchCode className="h-5 w-5" /> },
+      { id: 'toolbox', labelKey: 'nav.toolbox', icon: <Wrench className="h-5 w-5" /> }
     ]
   }
 ]
