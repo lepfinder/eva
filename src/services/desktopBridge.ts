@@ -150,6 +150,9 @@ const clipboardApi: Record<string, AnyFn> = {
   writeToClipboard: (id: string) => invoke('clipboard_write_to_clipboard', { id }),
   getCurrentImage: () => invoke('clipboard_get_current_image'),
   setText: (content: string) => invoke('clipboard_set_text', { content }),
+  getImageSaveConfig: () => invoke('clipboard_image_save_config_get'),
+  setImageSaveConfig: (dir: string, autoPaste: boolean) =>
+    invoke('clipboard_image_save_config_set', { config: { dir, autoPaste } }),
   getStats: () => invoke('clipboard_get_stats'),
   getDailyStats: () => invoke('clipboard_get_daily_stats'),
   // Real-time push: listen for clipboard:newItem Tauri events
@@ -269,6 +272,13 @@ const aiApi: Record<string, AnyFn> = {
   getImageByHash: (hash: string) => invoke('ai_get_image_by_hash', { hash }),
 }
 
+// Accessibility（辅助功能授权，保存后自动粘贴到光标处用）
+const accessibilityApi: Record<string, AnyFn> = {
+  isTrusted: () => invoke('accessibility_is_trusted'),
+  requestTrust: () => invoke('accessibility_request_trust'),
+  openSettings: () => invoke('accessibility_open_settings'),
+}
+
 // Global Hotkeys
 const hotkeysApi: Record<string, AnyFn> = {
   getAll: () => invoke('hotkeys_get_all'),
@@ -295,6 +305,7 @@ export function initDesktopBridge(): void {
       if (key === 'httpServer') return httpServerApi
       if (key === 'cdn') return cdnApi
       if (key === 'ai') return aiApi
+      if (key === 'accessibility') return accessibilityApi
       if (key === 'hotkeys') return hotkeysApi
       return stub[key]
     },

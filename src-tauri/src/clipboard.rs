@@ -1228,6 +1228,169 @@ pub fn clipboard_set_text(content: String) -> bool {
     set_clipboard_text(&content).is_ok()
 }
 
+// ──────────────────────────────────────────────────
+// 剪贴板图片存盘（save_clipboard_image 快捷键）
+// ──────────────────────────────────────────────────
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ImageSaveConfig {
+    pub dir: String,
+    /// 存盘后是否替用户按一次 ⌘V，把路径直接落到光标处。需要辅助功能授权。
+    #[serde(default)]
+    pub auto_paste: bool,
+}
+
+const DEFAULT_IMAGE_SAVE_DIR: &str = "~/Pictures/EVA";
+
+fn image_save_config_path(app: &AppHandle) -> PathBuf {
+    let base = app
+        .path()
+        .app_data_dir()
+        .unwrap_or_else(|_| PathBuf::from("."))
+        .join("userData");
+    let _ = fs::create_dir_all(&base);
+    base.join("image-save.json")
+}
+
+fn load_image_save_config(app: &AppHandle) -> ImageSaveConfig {
+    let path = image_save_config_path(app);
+    if let Ok(content) = fs::read_to_string(&path) {
+        if let Ok(cfg) = serde_json::from_str::<ImageSaveConfig>(&content) {
+            if !cfg.dir.trim().is_empty() {
+                return cfg;
+            }
+        }
+    }
+    ImageSaveConfig {
+        dir: DEFAULT_IMAGE_SAVE_DIR.to_string(),
+        auto_paste: false,
+    }
+}
+
+#[tauri::command]
+pub fn clipboard_image_save_config_get(app: AppHandle) -> ImageSaveConfig {
+    load_image_save_config(&app)
+}
+
+#[tauri::command]
+pub fn clipboard_image_save_config_set(
+    app: AppHandle,
+    config: ImageSaveConfig,
+) -> Result<ImageSaveConfig, String> {
+    let dir = config.dir.trim().to_string();
+    if dir.is_empty() {
+        return Err("目录不能为空".to_string());
+    }
+    let cfg = ImageSaveConfig {
+        dir,
+        auto_paste: config.auto_paste,
+    };
+    let json = serde_json::to_string_pretty(&cfg).map_err(|e| e.to_string())?;
+    fs::write(image_save_config_path(&app), json).map_err(|e| e.to_string())?;
+    Ok(cfg)
+}
+
+fn expand_tilde(path: &str) -> PathBuf {
+    if let Some(rest) = path.strip_prefix("~/") {
+        if let Some(home) = dirs::home_dir() {
+            return home.join(rest);
+        }
+    }
+    PathBuf::from(path)
+}
+
+fn timestamp_filename() -> String {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
+    let secs = now.as_secs() as i64;
+    let millis = now.subsec_millis();
+    let out = Command::new("date")
+        .args(["-r", &secs.to_string(), "+%Y%m%d_%H%M%S"])
+        .output()
+        .ok();
+    if let Some(o) = out {
+        let s = String::from_utf8_lossy(&o.stdout).trim().to_string();
+        if s.len() == 15 {
+            return format!("EVA_{}_{}.png", s, millis);
+        }
+    }
+    format!("EVA_{}_{}.png", secs, millis)
+}
+
+/// Save the clipboard image into the configured directory, then replace the
+/// clipboard text with the file path so ⌘V pastes the path. With auto-paste on
+/// and focus sitting in an editable text field, EVA presses ⌘V itself. Returns
+/// the path, or None when the clipboard has no image or the write failed. Every
+/// outcome raises a toast, since no EVA window is visible when the hotkey fires.
+pub fn save_clipboard_image_to_disk(app: &AppHandle) -> Option<String> {
+    let Some((png, width, height)) = read_clipboard_image_png() else {
+        crate::toast::warn(app, "剪贴板中没有图片", "先复制或截图一张图片，再按此快捷键");
+        return None;
+    };
+    let config = load_image_save_config(app);
+    let dir = expand_tilde(&config.dir);
+    if let Err(e) = fs::create_dir_all(&dir) {
+        crate::toast::warn(
+            app,
+            "图片保存失败",
+            &format!("无法创建目录 {}：{e}", dir.display()),
+        );
+        return None;
+    }
+    let path = dir.join(timestamp_filename());
+    if let Err(e) = fs::write(&path, &png) {
+        crate::toast::warn(app, "图片保存失败", &format!("{}：{e}", path.display()));
+        return None;
+    }
+    let path_str = path.to_string_lossy().into_owned();
+    if set_clipboard_text(&path_str).is_err() {
+        log::error!("[Clipboard] image saved to {} but failed to set clipboard text", path_str);
+        crate::toast::warn(app, "图片已保存，但写入剪贴板失败", &path_str);
+        return None;
+    }
+    log::info!(
+        "[Clipboard] image saved {}x{} -> {} ({} KB)",
+        width,
+        height,
+        path_str,
+        png.len() / 1024
+    );
+    match paste_at_cursor(config.auto_paste) {
+        Paste::Done => crate::toast::show(app, "图片已保存 · 已粘贴到光标处", &path_str),
+        Paste::NoPermission => {
+            crate::toast::warn(app, "图片已保存 · 路径已复制", "自动粘贴需要辅助功能授权")
+        }
+        Paste::Skipped => crate::toast::show(app, "图片已保存 · 路径已复制", &path_str),
+    }
+    Some(path_str)
+}
+
+enum Paste {
+    Done,
+    NoPermission,
+    Skipped,
+}
+
+/// 开关打开、已拿到辅助功能授权、且焦点确实在可输入文本控件上时，替用户按一次 ⌘V。
+/// 其余情况退回"路径已在剪贴板里"，由用户自己粘。
+fn paste_at_cursor(auto_paste: bool) -> Paste {
+    if !auto_paste {
+        return Paste::Skipped;
+    }
+    if !crate::accessibility::is_trusted() {
+        log::info!("[Clipboard] auto-paste skipped: accessibility not granted");
+        return Paste::NoPermission;
+    }
+    if !crate::accessibility::focused_field_is_editable() {
+        log::info!("[Clipboard] auto-paste skipped: focus is not an editable text field");
+        return Paste::Skipped;
+    }
+    crate::accessibility::paste_with_cmd_v();
+    Paste::Done
+}
+
 #[tauri::command]
 pub fn clipboard_get_stats(state: tauri::State<SharedClipboardState>) -> ClipboardStats {
     with_db(&state, |conn| {

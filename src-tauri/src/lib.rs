@@ -1,3 +1,4 @@
+pub mod accessibility;
 pub mod activity_tracker;
 pub mod ai;
 pub mod cdn;
@@ -11,6 +12,7 @@ pub mod media_embed;
 pub mod memory_analyzer;
 pub mod navigation;
 pub mod settings;
+pub mod toast;
 pub mod vault;
 pub mod visual_recall;
 
@@ -129,6 +131,9 @@ pub fn run() {
             // Initialise clipboard service
             let clipboard_state = clipboard::init(app.handle());
             app.manage(clipboard_state);
+
+            // 预热悬浮提示条窗口，保证第一条提示也能渲染出来
+            toast::prewarm(app.handle());
 
             // Initialise activity tracker (creates DB, starts polling)
             let activity_state = activity_tracker::init(app.handle());
@@ -323,6 +328,12 @@ pub fn run() {
             clipboard::clipboard_write_to_clipboard,
             clipboard::clipboard_get_current_image,
             clipboard::clipboard_set_text,
+            clipboard::clipboard_image_save_config_get,
+            clipboard::clipboard_image_save_config_set,
+            // Accessibility（自动粘贴到光标处）
+            accessibility::accessibility_is_trusted,
+            accessibility::accessibility_request_trust,
+            accessibility::accessibility_open_settings,
             clipboard::clipboard_get_stats,
             clipboard::clipboard_get_daily_stats,
             clipboard::clipboard_get_image_data,

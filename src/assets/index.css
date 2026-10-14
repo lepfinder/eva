@@ -198,3 +198,18 @@
     opacity: 1;
   }
 }
+
+/* 悬浮提示条窗口要真透明，覆盖全局 body 背景 */
+body.toast-window {
+  background: transparent;
+}
+
+@keyframes toastIn {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}

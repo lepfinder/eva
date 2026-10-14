@@ -3,6 +3,7 @@ import { MainLayout } from '@/components/layout/MainLayout'
 import { SplashScreen } from '@/components/SplashScreen'
 import { TrayReceiptView } from '@/components/TrayReceiptView'
 import { QuickHubView } from '@/components/hub/QuickHubView'
+import { ToastView } from '@/components/ToastView'
 
 function App(): React.ReactElement {
   const [showSplash, setShowSplash] = useState(true)
@@ -15,6 +16,11 @@ function App(): React.ReactElement {
   const isHub = typeof window !== 'undefined' && window.location.search.includes('window=hub')
   if (isHub) {
     return <QuickHubView />
+  }
+
+  const isToast = typeof window !== 'undefined' && window.location.search.includes('window=toast')
+  if (isToast) {
+    return <ToastView />
   }
 
   const handleSplashComplete = (): void => {

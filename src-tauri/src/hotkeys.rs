@@ -32,6 +32,7 @@ pub enum HotkeyAction {
     HubClipboard,
     HubCommand,
     HubOcr,
+    SaveClipboardImage,
 }
 
 pub type HotkeyActionMap = HashMap<Shortcut, HotkeyAction>;
@@ -83,6 +84,14 @@ pub fn get_default_hotkeys() -> Vec<HotkeyItem> {
             default_shortcut: "CommandOrControl+Shift+Semicolon".to_string(),
             enabled: true,
         },
+        HotkeyItem {
+            id: "save_clipboard_image".to_string(),
+            name: "剪贴板图片存为文件".to_string(),
+            description: "把剪贴板图片保存到指定目录，剪贴板替换为文件路径，可直接 ⌘V 粘贴路径".to_string(),
+            shortcut: "CommandOrControl+Shift+Quote".to_string(),
+            default_shortcut: "CommandOrControl+Shift+Quote".to_string(),
+            enabled: true,
+        },
     ]
 }
 
@@ -123,6 +132,7 @@ fn id_to_action(id: &str) -> Option<HotkeyAction> {
         "hub_clipboard" => Some(HotkeyAction::HubClipboard),
         "hub_command" => Some(HotkeyAction::HubCommand),
         "hub_ocr" => Some(HotkeyAction::HubOcr),
+        "save_clipboard_image" => Some(HotkeyAction::SaveClipboardImage),
         _ => None,
     }
 }
@@ -187,6 +197,9 @@ pub fn handle_hotkey_action(app: &AppHandle, action: HotkeyAction) {
         HotkeyAction::HubClipboard => trigger_hub(app, "clipboard", 1),
         HotkeyAction::HubCommand => trigger_hub(app, "command", 2),
         HotkeyAction::HubOcr => trigger_hub(app, "ocr", 3),
+        HotkeyAction::SaveClipboardImage => {
+            crate::clipboard::save_clipboard_image_to_disk(app);
+        }
     }
 }
 

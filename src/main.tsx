@@ -8,6 +8,10 @@ import './assets/index.css'
 
 initDesktopBridge()
 
+if (window.location.search.includes('window=toast')) {
+  document.body.classList.add('toast-window')
+}
+
 ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(
   <React.StrictMode>
     <ThemeProvider>

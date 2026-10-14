@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import { Separator } from '@/components/ui/separator'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
 import { Switch } from '@/components/ui/switch'
@@ -311,12 +312,91 @@ export function SettingsPage({ initialTab }: { initialTab?: string }): React.Rea
       shortcut: 'Alt+KeyK',
       defaultShortcut: 'Alt+KeyK',
       enabled: true
+    },
+    {
+      id: 'hub_ocr',
+      name: '剪贴板图片 AI 识别 (HUB)',
+      description: '现场识别剪贴板中的图片，识别文字自动写回剪贴板，可直接 ⌘V 粘贴',
+      shortcut: 'CommandOrControl+Shift+Semicolon',
+      defaultShortcut: 'CommandOrControl+Shift+Semicolon',
+      enabled: true
+    },
+    {
+      id: 'save_clipboard_image',
+      name: '剪贴板图片存为文件',
+      description: '把剪贴板图片保存到指定目录，剪贴板替换为文件路径，可直接 ⌘V 粘贴路径',
+      shortcut: 'CommandOrControl+Shift+Quote',
+      defaultShortcut: 'CommandOrControl+Shift+Quote',
+      enabled: true
     }
   ])
   const [editingHotkeyId, setEditingHotkeyId] = useState<string | null>(null)
   const [recordedKeys, setRecordedKeys] = useState<string[]>([])
   const [hotkeyMessage, setHotkeyMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null)
   const [savingHotkeys, setSavingHotkeys] = useState(false)
+  const [imageSaveDir, setImageSaveDir] = useState('')
+  const [imageAutoPaste, setImageAutoPaste] = useState(false)
+  const [accessibilityTrusted, setAccessibilityTrusted] = useState(false)
+
+  const refreshAccessibilityTrust = useCallback(async () => {
+    try {
+      if (window.api?.accessibility?.isTrusted) {
+        setAccessibilityTrusted(Boolean(await window.api.accessibility.isTrusted()))
+      }
+    } catch (e) {
+      console.error('检测辅助功能授权失败:', e)
+    }
+  }, [])
+
+  // 加载剪贴板图片保存设置
+  const loadImageSaveDir = useCallback(async () => {
+    try {
+      if (window.api?.clipboard?.getImageSaveConfig) {
+        const cfg = await window.api.clipboard.getImageSaveConfig()
+        if (cfg?.dir) setImageSaveDir(cfg.dir)
+        setImageAutoPaste(Boolean(cfg?.autoPaste))
+      }
+      await refreshAccessibilityTrust()
+    } catch (e) {
+      console.error('加载图片保存设置失败:', e)
+    }
+  }, [refreshAccessibilityTrust])
+
+  // 目录与自动粘贴开关共用同一份配置，任一改动都整写回去
+  const saveImageSaveConfig = useCallback(
+    async (dir: string, autoPaste: boolean, message: string) => {
+      const trimmed = dir.trim()
+      if (!trimmed) return
+      try {
+        if (window.api?.clipboard?.setImageSaveConfig) {
+          await window.api.clipboard.setImageSaveConfig(trimmed, autoPaste)
+          setImageSaveDir(trimmed)
+          setImageAutoPaste(autoPaste)
+          setHotkeyMessage({ text: message, type: 'success' })
+          setTimeout(() => setHotkeyMessage(null), 2000)
+        }
+      } catch (e) {
+        setHotkeyMessage({ text: `保存失败: ${e}`, type: 'error' })
+      }
+    },
+    []
+  )
+
+  const toggleImageAutoPaste = useCallback(
+    async (next: boolean) => {
+      await saveImageSaveConfig(imageSaveDir, next, next ? '已开启自动粘贴' : '已关闭自动粘贴')
+      if (next && !accessibilityTrusted) void window.api?.accessibility?.requestTrust?.()
+    },
+    [imageSaveDir, accessibilityTrusted, saveImageSaveConfig]
+  )
+
+  // 用户去系统设置里勾选后要回来刷新，否则状态一直停在"未授权"
+  useEffect(() => {
+    if (!imageAutoPaste) return
+    const onFocused = () => void refreshAccessibilityTrust()
+    window.addEventListener('focus', onFocused)
+    return () => window.removeEventListener('focus', onFocused)
+  }, [imageAutoPaste, refreshAccessibilityTrust])
 
   // 格式化展示按键名称
   const formatShortcutDisplay = (shortcut: string): string[] => {
@@ -349,6 +429,10 @@ export function SettingsPage({ initialTab }: { initialTab?: string }): React.Rea
   useEffect(() => {
     loadHotkeys()
   }, [loadHotkeys])
+
+  useEffect(() => {
+    loadImageSaveDir()
+  }, [loadImageSaveDir])
 
   // 保存并即时生效快捷键配置
   const saveHotkeysList = async (newList: HotkeyItem[], successMsg = '快捷键配置已即时生效') => {
@@ -846,6 +930,62 @@ export function SettingsPage({ initialTab }: { initialTab?: string }): React.Rea
                       <p>
                         💡 提示：按住 <kbd className="px-1.5 py-0.5 rounded bg-muted font-mono">⌥ Option</kbd>、<kbd className="px-1.5 py-0.5 rounded bg-muted font-mono">⌘ Command</kbd> 或 <kbd className="px-1.5 py-0.5 rounded bg-muted font-mono">⇧ Shift</kbd> 再按目标字母即可完成录制。若产生快捷键冲突，可随时关闭对应开关停用。
                       </p>
+                    </div>
+
+                    {/* 剪贴板图片保存目录（save_clipboard_image 快捷键的落盘位置） */}
+                    <div className="pt-3 border-t border-border/40 space-y-1.5">
+                      <Label className="text-xs text-muted-foreground">剪贴板图片保存目录</Label>
+                      <Input
+                        value={imageSaveDir}
+                        onChange={(e) => setImageSaveDir(e.target.value)}
+                        onBlur={() => {
+                          if (imageSaveDir.trim())
+                            void saveImageSaveConfig(
+                              imageSaveDir,
+                              imageAutoPaste,
+                              '图片保存目录已更新'
+                            )
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') e.currentTarget.blur()
+                        }}
+                        placeholder="~/Pictures/EVA"
+                        className="font-mono text-xs"
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        按「剪贴板图片存为文件」快捷键后，图片保存到该目录（支持 ~ 开头），剪贴板自动替换为文件路径
+                      </p>
+                    </div>
+
+                    {/* 存盘后自动粘贴到光标处（依赖辅助功能授权） */}
+                    <div className="pt-3 border-t border-border/40 space-y-1.5">
+                      <div className="flex items-center justify-between gap-3">
+                        <Label className="text-xs text-muted-foreground">
+                          存盘后自动粘贴到光标处
+                        </Label>
+                        <Switch
+                          checked={imageAutoPaste}
+                          onCheckedChange={(next) => void toggleImageAutoPaste(next)}
+                        />
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        焦点在输入框时，保存完直接替你按一次 ⌘V；否则维持原样，只把路径留在剪贴板里
+                      </p>
+                      {imageAutoPaste && !accessibilityTrusted && (
+                        <div className="flex items-center gap-2">
+                          <p className="text-xs text-amber-500">
+                            还需要在系统设置里允许 EVA 使用辅助功能
+                          </p>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-6 text-xs"
+                            onClick={() => void window.api?.accessibility?.openSettings?.()}
+                          >
+                            去授权
+                          </Button>
+                        </div>
+                      )}
                     </div>
                   </CardContent>
                 </Card>
