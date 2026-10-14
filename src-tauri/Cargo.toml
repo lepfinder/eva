@@ -1,6 +1,6 @@
 [package]
 name = "eva"
-version = "0.3.2"
+version = "0.4.0"
 description = "EVA Desktop Context & Intelligence System for AI Agents"
 authors = ["xiyangxie"]
 license = "MIT"
@@ -31,7 +31,7 @@ clap = { version = "4.5", features = ["derive"] }
 serde_json = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 log = "0.4"
-tauri = { version = "2.10.3", features = ["protocol-asset", "tray-icon"] }
+tauri = { version = "2.10.3", features = ["protocol-asset", "tray-icon", "macos-private-api"] }
 tauri-plugin-log = "2"
 tauri-plugin-global-shortcut = "2"
 reqwest = { version = "0.12", features = ["rustls-tls", "blocking", "json"], default-features = false }
