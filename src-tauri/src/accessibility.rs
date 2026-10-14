@@ -35,6 +35,9 @@ extern "C" {
     fn AXUIElementSetAttributeValue(element: AxRef, attribute: CfRef, value: CfRef) -> i32;
 
     static kCFBooleanTrue: CfRef;
+    /// CFDictionaryCreate 的回调不能传 NULL，否则读取方解引用空回调表崩溃。
+    static kCFTypeDictionaryKeyCallBacks: c_void;
+    static kCFTypeDictionaryValueCallBacks: c_void;
 
     fn CFStringCreateWithCString(alloc: CfRef, c_str: *const i8, encoding: u32) -> CfRef;
     fn CFStringGetCString(string: CfRef, buffer: *mut i8, buffer_size: isize, encoding: u32) -> i8;
@@ -102,8 +105,8 @@ pub fn prompt_for_trust() {
             keys.as_ptr(),
             values.as_ptr(),
             keys.len() as isize,
-            ptr::null(),
-            ptr::null(),
+            &kCFTypeDictionaryKeyCallBacks as *const c_void,
+            &kCFTypeDictionaryValueCallBacks as *const c_void,
         );
         if !dict.is_null() {
             AXIsProcessTrustedWithOptions(dict);
