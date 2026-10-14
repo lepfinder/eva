@@ -1381,6 +1381,7 @@ fn paste_at_cursor(auto_paste: bool) -> Paste {
     }
     if !crate::accessibility::is_trusted() {
         log::info!("[Clipboard] auto-paste skipped: accessibility not granted");
+        crate::accessibility::prompt_for_trust_once();
         return Paste::NoPermission;
     }
     if !crate::accessibility::focused_field_is_editable() {

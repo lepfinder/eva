@@ -10,6 +10,7 @@
 use std::ffi::{CStr, CString};
 use std::os::raw::c_void;
 use std::ptr;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 type AxRef = *mut c_void;
@@ -76,6 +77,15 @@ pub fn accessibility_request_trust() {
 #[tauri::command]
 pub fn accessibility_open_settings() {
     open_accessibility_settings()
+}
+
+/// 缺权限时主动弹一次系统授权框；同一次运行内只弹一次，之后靠设置页引导。
+pub fn prompt_for_trust_once() {
+    static PROMPTED: AtomicBool = AtomicBool::new(false);
+    if PROMPTED.swap(true, Ordering::Relaxed) {
+        return;
+    }
+    prompt_for_trust();
 }
 
 /// 弹出系统的"允许辅助功能"授权框。
