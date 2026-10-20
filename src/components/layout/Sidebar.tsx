@@ -15,6 +15,7 @@ import {
   Activity,
   SearchCode,
   Images,
+  Frame,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
@@ -35,6 +36,7 @@ export type NavItem =
   | 'timeauditor'
   | 'visualrecall'
   | 'mediaassets'
+  | 'whiteboard'
   | 'settings'
 
 interface SidebarProps {
@@ -52,7 +54,8 @@ const navGroups = [
   {
     title: 'LIBRARY',
     items: [
-      { id: 'mediaassets', labelKey: 'nav.mediaassets', icon: <Images className="h-5 w-5" /> }
+      { id: 'mediaassets', labelKey: 'nav.mediaassets', icon: <Images className="h-5 w-5" /> },
+      { id: 'whiteboard', labelKey: 'nav.whiteboard', icon: <Frame className="h-5 w-5" /> }
     ]
   },
   {

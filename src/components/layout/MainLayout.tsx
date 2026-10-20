@@ -11,6 +11,7 @@ import { ClipboardHistoryPage } from '@/pages/ClipboardHistoryPage'
 import { TimeAuditorPage } from '@/pages/TimeAuditorPage'
 import { VisualRecallPage } from '@/pages/VisualRecallPage'
 import { MediaAssetsPage } from '@/pages/MediaAssetsPage'
+import { WhiteboardPage } from '@/pages/WhiteboardPage'
 import { LocalPortsPage } from '@/pages/LocalPortsPage'
 import { MemoryAnalyzerPage } from '@/pages/MemoryAnalyzerPage'
 import { EnvDetectorPage } from '@/pages/EnvDetectorPage'
@@ -31,6 +32,7 @@ const NAV_TITLE_MAP: Record<NavItem, string> = {
   timeauditor: '时间审计',
   visualrecall: '视觉回溯',
   mediaassets: '素材库',
+  whiteboard: '白板',
   settings: '设置'
 }
 
@@ -71,7 +73,8 @@ export function MainLayoutContents(): React.ReactElement {
         '/navigation': 'navigation',
         '/toolbox': 'toolbox',
         '/visual-recall': 'visualrecall',
-        '/media-assets': 'mediaassets'
+        '/media-assets': 'mediaassets',
+        '/whiteboard': 'whiteboard'
       }
       const navItem = pathToNav[path]
       if (navItem) {
@@ -215,6 +218,8 @@ export function MainLayoutContents(): React.ReactElement {
         return <VisualRecallPage />
       case 'mediaassets':
         return <MediaAssetsPage />
+      case 'whiteboard':
+        return <WhiteboardPage />
 
       case 'settings':
         return <SettingsPage initialTab={settingsInitialTab ?? undefined} />
@@ -234,7 +239,8 @@ export function MainLayoutContents(): React.ReactElement {
     activeNav === 'clipboard' ||
     activeNav === 'timeauditor' ||
     activeNav === 'visualrecall' ||
-    activeNav === 'mediaassets'
+    activeNav === 'mediaassets' ||
+    activeNav === 'whiteboard'
 
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-background">

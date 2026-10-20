@@ -43,6 +43,7 @@ import {
   ExternalLink,
   LayoutDashboard,
   RotateCcw,
+  Frame,
 } from 'lucide-react'
 
 // 存储统计类型
@@ -66,6 +67,7 @@ const STORAGE_ICONS: Record<string, React.ReactNode> = {
   'clipboard_history': <Clipboard className="h-4 w-4" />,
   'vault': <Lock className="h-4 w-4" />,
   'activity_tracker': <Activity className="h-4 w-4" />,
+  'whiteboard': <Frame className="h-4 w-4" />,
   'other': <FileText className="h-4 w-4" />
 }
 
@@ -77,6 +79,7 @@ const STORAGE_COLORS: Record<string, string> = {
   'clipboard_history': '#8b5cf6', // purple
   'vault': '#ef4444', // red
   'activity_tracker': '#f97316', // orange
+  'whiteboard': '#14b8a6', // teal
   'other': '#cbd5e1' // gray
 }
 

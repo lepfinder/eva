@@ -15,6 +15,7 @@ pub mod settings;
 pub mod toast;
 pub mod vault;
 pub mod visual_recall;
+pub mod whiteboard;
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -154,6 +155,10 @@ pub fn run() {
             // Initialise media embeddings (Ollama)
             let media_embed_state = media_embed::init(app.handle());
             app.manage(media_embed_state);
+
+            // Initialise whiteboard
+            let whiteboard_state = whiteboard::init(app.handle());
+            app.manage(whiteboard_state);
 
             // Initialise CDN / image bed
             let cdn_state = cdn::init(app.handle());
@@ -410,6 +415,20 @@ pub fn run() {
             cdn::cdn_import_from_piclist,
             cdn::cdn_upload_file,
             cdn::cdn_upload_bytes,
+            // Whiteboard
+            whiteboard::whiteboard_list_boards,
+            whiteboard::whiteboard_create_board,
+            whiteboard::whiteboard_rename_board,
+            whiteboard::whiteboard_delete_board,
+            whiteboard::whiteboard_get_board,
+            whiteboard::whiteboard_save_viewport,
+            whiteboard::whiteboard_add_image_from_bytes,
+            whiteboard::whiteboard_add_image_from_path,
+            whiteboard::whiteboard_update_images_batch,
+            whiteboard::whiteboard_delete_images,
+            whiteboard::whiteboard_add_text,
+            whiteboard::whiteboard_update_texts_batch,
+            whiteboard::whiteboard_delete_texts,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

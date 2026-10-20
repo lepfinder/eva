@@ -81,7 +81,8 @@
         "enable": true,
         "scope": [
           "$APPDATA/userData/clipboard-images/**",
-          "$APPDATA/userData/screenshots/**"
+          "$APPDATA/userData/screenshots/**",
+          "$APPDATA/userData/whiteboard/**"
         ]
       }
     }

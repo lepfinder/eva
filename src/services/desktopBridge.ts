@@ -1,5 +1,6 @@
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
+import { whiteboardApi } from './whiteboard'
 
 type AnyFn = (...args: any[]) => any
 
@@ -307,6 +308,7 @@ export function initDesktopBridge(): void {
       if (key === 'ai') return aiApi
       if (key === 'accessibility') return accessibilityApi
       if (key === 'hotkeys') return hotkeysApi
+      if (key === 'whiteboard') return whiteboardApi
       return stub[key]
     },
   })

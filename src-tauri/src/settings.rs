@@ -85,6 +85,8 @@ pub fn get_storage_stats(app: AppHandle) -> StorageStats {
         ("剪贴板图片", "clipboard-images", "clipboard_images"),
         ("剪贴板历史", "clipboard-history.db", "clipboard_history"),
         ("知识库索引", "knowledge_base", "knowledge_base"),
+        ("白板图片", "whiteboard", "whiteboard"),
+        ("白板数据", "whiteboard.db", "whiteboard"),
     ];
 
     let mut items: Vec<StorageItem> = item_configs
