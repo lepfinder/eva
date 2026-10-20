@@ -16,6 +16,7 @@ import {
   SearchCode,
   Images,
   Frame,
+  FolderSync,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
@@ -28,6 +29,7 @@ export type NavItem =
   | 'dashboard'
   | 'navigation'
   | 'localports'
+  | 'filesync'
   | 'memory'
   | 'envdetector'
   | 'toolbox'
@@ -72,6 +74,7 @@ const navGroups = [
     items: [
       { id: 'navigation', labelKey: 'nav.navigation', icon: <Compass className="h-5 w-5" /> },
       { id: 'localports', labelKey: 'nav.localports', icon: <Radio className="h-5 w-5" /> },
+      { id: 'filesync', labelKey: 'nav.filesync', icon: <FolderSync className="h-5 w-5" /> },
       { id: 'memory', labelKey: 'nav.memory', icon: <Activity className="h-5 w-5" /> },
       { id: 'envdetector', labelKey: 'nav.envdetector', icon: <SearchCode className="h-5 w-5" /> },
       { id: 'toolbox', labelKey: 'nav.toolbox', icon: <Wrench className="h-5 w-5" /> }

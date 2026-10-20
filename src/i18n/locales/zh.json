@@ -13,6 +13,7 @@
     "dashboard": "仪表盘",
     "navigation": "网站导航",
     "localports": "本地端口",
+    "filesync": "文件同步",
     "memory": "内存分析",
     "envdetector": "环境探测",
     "toolbox": "工具箱",

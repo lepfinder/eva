@@ -13,6 +13,7 @@ import { VisualRecallPage } from '@/pages/VisualRecallPage'
 import { MediaAssetsPage } from '@/pages/MediaAssetsPage'
 import { WhiteboardPage } from '@/pages/WhiteboardPage'
 import { LocalPortsPage } from '@/pages/LocalPortsPage'
+import { FileSyncPage } from '@/pages/FileSyncPage'
 import { MemoryAnalyzerPage } from '@/pages/MemoryAnalyzerPage'
 import { EnvDetectorPage } from '@/pages/EnvDetectorPage'
 import { CommandPaletteModal } from '@/components/CommandPaletteModal'
@@ -24,6 +25,7 @@ const NAV_TITLE_MAP: Record<NavItem, string> = {
   dashboard: '仪表盘',
   navigation: '网站导航',
   localports: '本地端口',
+  filesync: '文件同步',
   memory: '内存分析',
   envdetector: '环境探测',
   toolbox: '工具箱',
@@ -74,7 +76,8 @@ export function MainLayoutContents(): React.ReactElement {
         '/toolbox': 'toolbox',
         '/visual-recall': 'visualrecall',
         '/media-assets': 'mediaassets',
-        '/whiteboard': 'whiteboard'
+        '/whiteboard': 'whiteboard',
+        '/file-sync': 'filesync'
       }
       const navItem = pathToNav[path]
       if (navItem) {
@@ -202,6 +205,8 @@ export function MainLayoutContents(): React.ReactElement {
         return <NavigationPage />
       case 'localports':
         return <LocalPortsPage />
+      case 'filesync':
+        return <FileSyncPage />
       case 'memory':
         return <MemoryAnalyzerPage />
       case 'envdetector':
@@ -232,6 +237,7 @@ export function MainLayoutContents(): React.ReactElement {
     activeNav === 'dashboard' ||
     activeNav === 'navigation' ||
     activeNav === 'localports' ||
+    activeNav === 'filesync' ||
     activeNav === 'memory' ||
     activeNav === 'envdetector' ||
     activeNav === 'toolbox' ||

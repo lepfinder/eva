@@ -13,6 +13,7 @@ import {
   SearchCode,
   Pipette,
   BookOpen,
+  FolderSync,
 } from 'lucide-react'
 
 export type ToolId =
@@ -24,12 +25,14 @@ export type ToolId =
   | 'password-generator'
   | 'sql-generator'
   | 'local-ports'
+  | 'file-sync'
   | 'env-detector'
   | 'color-picker'
   | 'cheatsheet'
 
 export type SidebarToolNav =
   | 'localports'
+  | 'filesync'
   | 'memory'
   | 'envdetector'
 
@@ -50,6 +53,13 @@ export const diagnosticTools: ToolConfig[] = [
     description: '查看和管理本地监听的网络端口',
     icon: <Radio className="h-8 w-8" />,
     nav: 'localports',
+  },
+  {
+    id: 'file-sync',
+    title: '文件同步 (Mutagen)',
+    description: '监控和管理双机/远程代码同步，支持实时双向监听、冲突排查与一键强制刷写',
+    icon: <FolderSync className="h-8 w-8" />,
+    nav: 'filesync',
   },
   {
     id: 'memory-analyzer',

@@ -16,6 +16,7 @@ pub mod toast;
 pub mod vault;
 pub mod visual_recall;
 pub mod whiteboard;
+pub mod mutagen;
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -429,6 +430,16 @@ pub fn run() {
             whiteboard::whiteboard_add_text,
             whiteboard::whiteboard_update_texts_batch,
             whiteboard::whiteboard_delete_texts,
+            // Mutagen File Sync
+            mutagen::mutagen_get_status,
+            mutagen::mutagen_list_sessions,
+            mutagen::mutagen_create_session,
+            mutagen::mutagen_pause_session,
+            mutagen::mutagen_resume_session,
+            mutagen::mutagen_flush_session,
+            mutagen::mutagen_reset_session,
+            mutagen::mutagen_terminate_session,
+            mutagen::mutagen_test_ssh,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

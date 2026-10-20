@@ -1,6 +1,7 @@
 import { DynamicGreeting } from '@/components/dashboard/DynamicGreeting'
 import { TimePulseHeatmap } from '@/components/dashboard/TimePulseHeatmap'
 import { QuickTools } from '@/components/dashboard/QuickTools'
+import { QuickSyncCard } from '@/components/dashboard/QuickSyncCard'
 import { QuickClipsCard } from '@/components/dashboard/QuickClipsCard'
 import { VRMViewer } from '@/components/dashboard/VRMViewer'
 import { EvaSpeechBubble } from '@/components/dashboard/EvaSpeechBubble'
@@ -86,6 +87,20 @@ export function DashboardPage(): React.ReactElement {
             }}
           >
             <QuickTools />
+          </div>
+
+          {/* Card 2.5: 双机文件同步状态微卡片 */}
+          <div 
+            className="p-4 rounded-2xl transition-all duration-300 hover:-translate-y-0.5"
+            style={{
+              background: 'linear-gradient(135deg, rgba(255, 255, 255, 0.78) 0%, rgba(255, 255, 255, 0.52) 100%)',
+              backdropFilter: 'blur(24px)',
+              WebkitBackdropFilter: 'blur(24px)',
+              border: '1px solid rgba(255, 255, 255, 0.65)',
+              boxShadow: '0 12px 36px -4px rgba(0, 0, 0, 0.05), 0 4px 16px -2px rgba(0, 0, 0, 0.02)',
+            }}
+          >
+            <QuickSyncCard />
           </div>
 
           {/* Card 3: 最近剪贴板暂存 (Quick Clips) */}
